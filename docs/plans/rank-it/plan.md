@@ -5,7 +5,7 @@
 ## Status
 
 - [x] Commit 1: Pure ranking engine
-- [ ] Commit 2: Catalog operations
+- [x] Commit 2: Catalog operations
 - [ ] Commit 3: SQLite persistence
 - [ ] Commit 4: Basic CLI
 
