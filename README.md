@@ -27,11 +27,13 @@ npm run rank-it -- users create Alice
 npm run rank-it -- users list
 ```
 
-Add an item for a user. Titles with spaces may be passed as separate arguments or quoted. Omit `--user` to use the `default` user (created automatically on first use):
+Add an item for a user. Titles with spaces may be passed as separate arguments
+or quoted. Omit `--user` to use the `default` user (created automatically on
+first use):
 
 ```sh
-npm run rank-it -- add movies Arrival --year 2016
-npm run rank-it -- add video-games "Outer Wilds" --user Alice --notes "Explore freely"
+npm run rank-it -- add movies Arrival
+npm run rank-it -- add video-games "Outer Wilds" --user Alice
 ```
 
 The first item in a category is ranked immediately. Every later item is placed with pairwise comparisons against existing entries.

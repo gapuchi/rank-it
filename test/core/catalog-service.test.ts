@@ -66,8 +66,6 @@ describe("CatalogService", () => {
       userId,
       category: "video-games",
       title: "  Outer Wilds  ",
-      year: 2019,
-      notes: "  Explore freely.  ",
     });
 
     expect(session.next()).toMatchObject({ type: "done" });
@@ -76,8 +74,6 @@ describe("CatalogService", () => {
         id: "new-1",
         category: "video-games",
         title: "Outer Wilds",
-        year: 2019,
-        notes: "Explore freely.",
       },
     ]);
   });

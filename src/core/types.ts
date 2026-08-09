@@ -11,8 +11,6 @@ export interface Item {
   readonly id: string;
   readonly category: Category;
   readonly title: string;
-  readonly year?: number;
-  readonly notes?: string;
 }
 
 export interface RankedItem extends Item {

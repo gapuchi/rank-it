@@ -26,7 +26,7 @@ Build a local-first MVP with three independent catalogs—movies, TV shows, and 
 1. Place new items using binary insertion driven by pairwise comparisons; ordered position is authoritative.
 2. Ask for a bad, okay, or great bucket before binary-searching within that region.
 3. Derive a display-only 0.0–10.0 score from each item's position.
-4. Require a title and allow optional year and notes; do not integrate external metadata in v1.
+4. Require a title; defer all additional metadata.
 5. Expose ranking as a stateful core session that yields one prompt at a time.
 6. Delete by compacting the list; re-rank by removing and reinserting the item.
 7. Require a binary choice in v1 and defer ties or “can't decide.”
@@ -45,7 +45,7 @@ Build a small TypeScript package with a pure ranking engine and SQLite-backed ca
 
 ```
 CLI → CatalogService.addItem
-  input:  { category, title, year?, notes? }
+  input:  { category, title }
   output: RankingSession
   invariant: the item is not placed until the session completes
 
@@ -180,3 +180,4 @@ Each increment is one local commit on `main`, in order. No remote operations or 
 ## Plan drift
 
 2026-08-09: Added a Nix flake development shell to Commit 1 after confirming Nix is the project's development-environment convention.
+2026-08-09: Removed year and notes from the item model to keep the initial catalog focused on ranking.

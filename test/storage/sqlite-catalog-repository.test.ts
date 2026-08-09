@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe("SqliteCatalogRepository", () => {
-  it("persists ordered items and metadata across reopen", () => {
+  it("persists ordered items across reopen", () => {
     const path = temporaryDatabasePath();
     const repository = new SqliteCatalogRepository(path);
     const user = repository.createUser("tester");
@@ -41,8 +41,6 @@ describe("SqliteCatalogRepository", () => {
         id: "arrival",
         category: "movies",
         title: "Arrival",
-        year: 2016,
-        notes: "First contact.",
       },
       item("moonlight", "movies", "Moonlight"),
     ]);
@@ -54,8 +52,6 @@ describe("SqliteCatalogRepository", () => {
         id: "arrival",
         category: "movies",
         title: "Arrival",
-        year: 2016,
-        notes: "First contact.",
       },
       item("moonlight", "movies", "Moonlight"),
     ]);

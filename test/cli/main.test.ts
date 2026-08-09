@@ -45,14 +45,14 @@ describe("runCli", () => {
     const harness = createHarness();
 
     await expect(
-      harness.execute(["add", "movies", "Arrival", "--year", "2016"]),
+      harness.execute(["add", "movies", "Arrival"]),
     ).resolves.toEqual(['Ranked "Arrival" at #1 (10.0) for default']);
     await expect(
       harness.execute(["add", "movies", "Moonlight"], ["no"]),
     ).resolves.toEqual(['Ranked "Moonlight" at #2 (0.0) for default']);
 
     await expect(harness.execute(["list", "movies"])).resolves.toEqual([
-      "#1  10.0  item-1  Arrival (2016)",
+      "#1  10.0  item-1  Arrival",
       "#2  0.0  item-2  Moonlight",
     ]);
   });

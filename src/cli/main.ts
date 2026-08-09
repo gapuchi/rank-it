@@ -32,7 +32,7 @@ const usage = `rank-it — track and rank what you have completed
 Usage:
   npm run rank-it -- users list
   npm run rank-it -- users create <name>
-  npm run rank-it -- add <category> <title> [--user <name>] [--year <year>] [--notes <notes>]
+  npm run rank-it -- add <category> <title> [--user <name>]
   npm run rank-it -- list <category> [--user <name>]
   npm run rank-it -- delete <category> <item-id> [--user <name>]
   npm run rank-it -- rerank <category> <item-id> [--user <name>]
@@ -50,9 +50,7 @@ export async function runCli(
     strict: true,
     options: {
       help: { type: "boolean", short: "h" },
-      notes: { type: "string" },
       user: { type: "string" },
-      year: { type: "string" },
     },
   });
 
@@ -95,14 +93,10 @@ export async function runCli(
         if (title.length === 0) {
           throw new Error("A title is required");
         }
-        const year =
-          values.year === undefined ? undefined : Number(values.year);
         const session = service.addItem({
           userId: user.id,
           category,
           title,
-          ...(year === undefined ? {} : { year }),
-          ...(values.notes === undefined ? {} : { notes: values.notes }),
         });
         const result = await completeRanking(session, dependencies);
         dependencies.write(
@@ -117,11 +111,8 @@ export async function runCli(
           return;
         }
         for (const item of items) {
-          const year = item.year === undefined ? "" : ` (${item.year})`;
-          const notes =
-            item.notes === undefined ? "" : ` — ${item.notes}`;
           dependencies.write(
-            `#${item.position}  ${item.score.toFixed(1)}  ${item.id}  ${item.title}${year}${notes}`,
+            `#${item.position}  ${item.score.toFixed(1)}  ${item.id}  ${item.title}`,
           );
         }
         return;

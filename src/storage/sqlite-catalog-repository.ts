@@ -15,8 +15,6 @@ interface ItemRow {
   readonly id: string;
   readonly category: string;
   readonly title: string;
-  readonly year: number | null;
-  readonly notes: string | null;
 }
 
 interface UserRow {
@@ -24,7 +22,7 @@ interface UserRow {
   readonly name: string;
 }
 
-const schemaVersion = 2;
+const schemaVersion = 3;
 
 export class SqliteCatalogRepository implements CatalogRepository, UserRepository {
   readonly #database: Database.Database;
@@ -72,7 +70,7 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
   getRankedItems(userId: string, category: Category): readonly Item[] {
     const rows = this.#database
       .prepare(
-        `SELECT id, category, title, year, notes
+        `SELECT id, category, title
          FROM ranked_items
          WHERE user_id = ? AND category = ?
          ORDER BY position ASC`,
@@ -83,8 +81,6 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
       id: row.id,
       category: parseCategory(row.category),
       title: row.title,
-      ...(row.year === null ? {} : { year: row.year }),
-      ...(row.notes === null ? {} : { notes: row.notes }),
     }));
   }
 
@@ -106,9 +102,9 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
         .run(userId, category);
       const insert = this.#database.prepare(
         `INSERT INTO ranked_items
-           (id, user_id, category, title, year, notes, position)
+           (id, user_id, category, title, position)
          VALUES
-           (@id, @userId, @category, @title, @year, @notes, @position)`,
+           (@id, @userId, @category, @title, @position)`,
       );
 
       items.forEach((item, index) => {
@@ -117,8 +113,6 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
           userId,
           category: item.category,
           title: item.title,
-          year: item.year ?? null,
-          notes: item.notes ?? null,
           position: index + 1,
         });
       });
@@ -192,6 +186,30 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
 
           DROP TABLE ranked_items;
           ALTER TABLE ranked_items_v2 RENAME TO ranked_items;
+        `);
+      }
+
+      if (currentVersion < 3) {
+        this.#database.exec(`
+          CREATE TABLE ranked_items_v3 (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            category TEXT NOT NULL CHECK (
+              category IN ('movies', 'tv-shows', 'video-games')
+            ),
+            title TEXT NOT NULL,
+            position INTEGER NOT NULL CHECK (position > 0),
+            UNIQUE (user_id, category, position)
+          );
+
+          INSERT INTO ranked_items_v3
+            (id, user_id, category, title, position)
+          SELECT
+            id, user_id, category, title, position
+          FROM ranked_items;
+
+          DROP TABLE ranked_items;
+          ALTER TABLE ranked_items_v3 RENAME TO ranked_items;
         `);
       }
 

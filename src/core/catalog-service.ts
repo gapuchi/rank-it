@@ -11,8 +11,6 @@ export interface AddItemInput {
   readonly userId: string;
   readonly category: Category;
   readonly title: string;
-  readonly year?: number;
-  readonly notes?: string;
 }
 
 export class CatalogRankingSession {
@@ -127,20 +125,11 @@ export class CatalogService {
     if (title.length === 0) {
       throw new Error("Title is required");
     }
-    if (
-      input.year !== undefined &&
-      (!Number.isInteger(input.year) || input.year < 1 || input.year > 9999)
-    ) {
-      throw new Error("Year must be an integer between 1 and 9999");
-    }
 
-    const notes = input.notes?.trim();
     return {
       id: this.#generateId(),
       category: input.category,
       title,
-      ...(input.year === undefined ? {} : { year: input.year }),
-      ...(notes === undefined || notes.length === 0 ? {} : { notes }),
     };
   }
 }
