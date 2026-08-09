@@ -46,10 +46,10 @@ describe("runCli", () => {
 
     await expect(
       harness.execute(["add", "movies", "Arrival", "--year", "2016"]),
-    ).resolves.toEqual(['Ranked "Arrival" at #1 (10.0)']);
+    ).resolves.toEqual(['Ranked "Arrival" at #1 (10.0) for default']);
     await expect(
-      harness.execute(["add", "movies", "Moonlight"], ["great", "no"]),
-    ).resolves.toEqual(['Ranked "Moonlight" at #2 (0.0)']);
+      harness.execute(["add", "movies", "Moonlight"], ["no"]),
+    ).resolves.toEqual(['Ranked "Moonlight" at #2 (0.0) for default']);
 
     await expect(harness.execute(["list", "movies"])).resolves.toEqual([
       "#1  10.0  item-1  Arrival (2016)",
@@ -60,23 +60,38 @@ describe("runCli", () => {
   it("re-ranks and deletes items by ID", async () => {
     const harness = createHarness();
     await harness.execute(["add", "video-games", "Outer Wilds"]);
-    await harness.execute(
-      ["add", "video-games", "Disco Elysium"],
-      ["great", "no"],
-    );
+    await harness.execute(["add", "video-games", "Disco Elysium"], ["no"]);
 
     await expect(
-      harness.execute(
-        ["rerank", "video-games", "item-2"],
-        ["great", "yes"],
-      ),
-    ).resolves.toEqual(['Re-ranked "Disco Elysium" at #1 (10.0)']);
+      harness.execute(["rerank", "video-games", "item-2"], ["yes"]),
+    ).resolves.toEqual(['Re-ranked "Disco Elysium" at #1 (10.0) for default']);
     await expect(
       harness.execute(["delete", "video-games", "item-1"]),
-    ).resolves.toEqual(["Deleted item-1 from video-games."]);
+    ).resolves.toEqual(["Deleted item-1 from video-games for default."]);
     await expect(
       harness.execute(["list", "video-games"]),
     ).resolves.toEqual(["#1  10.0  item-2  Disco Elysium"]);
+  });
+
+  it("creates and scopes rankings to named users", async () => {
+    const harness = createHarness();
+
+    await expect(harness.execute(["users", "create", "Alice"])).resolves.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^Created user "Alice"/)]),
+    );
+    await harness.execute([
+      "add",
+      "movies",
+      "Her",
+      "--user",
+      "Alice",
+    ]);
+    await expect(
+      harness.execute(["list", "movies", "--user", "Alice"]),
+    ).resolves.toEqual(["#1  10.0  item-1  Her"]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "No ranked items in movies for default.",
+    ]);
   });
 
   it("reports invalid categories without creating a ranking", async () => {

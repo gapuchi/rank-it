@@ -1,12 +1,7 @@
 import { scoreForPosition } from "./score.js";
 import type { Item, RankedItem } from "./types.js";
 
-export const buckets = ["great", "okay", "bad"] as const;
-
-export type Bucket = (typeof buckets)[number];
-
 export type RankingPrompt =
-  | { readonly type: "bucket"; readonly item: Item }
   | {
       readonly type: "compare";
       readonly item: Item;
@@ -14,32 +9,7 @@ export type RankingPrompt =
     }
   | { readonly type: "done"; readonly item: RankedItem };
 
-export type RankingAnswer =
-  | { readonly bucket: Bucket }
-  | { readonly better: boolean };
-
-interface Bounds {
-  readonly low: number;
-  readonly high: number;
-}
-
-export function boundsForBucket(bucket: Bucket, itemCount: number): Bounds {
-  if (!Number.isInteger(itemCount) || itemCount < 1) {
-    throw new Error("Bucket bounds require at least one ranked item");
-  }
-
-  switch (bucket) {
-    case "great":
-      return { low: 0, high: Math.ceil(itemCount / 3) };
-    case "okay":
-      return {
-        low: Math.floor(itemCount / 3),
-        high: Math.ceil((2 * itemCount) / 3),
-      };
-    case "bad":
-      return { low: Math.floor((2 * itemCount) / 3), high: itemCount };
-  }
-}
+export type RankingAnswer = { readonly better: boolean };
 
 export class RankingSession {
   readonly #item: Item;
@@ -58,10 +28,13 @@ export class RankingSession {
 
     this.#item = item;
     this.#rankedItems = [...rankedItems];
-    this.#prompt =
-      rankedItems.length === 0
-        ? this.#donePrompt(0)
-        : { type: "bucket", item: this.#item };
+    if (rankedItems.length === 0) {
+      this.#prompt = this.#donePrompt(0);
+    } else {
+      this.#low = 0;
+      this.#high = rankedItems.length;
+      this.#prompt = this.#advance();
+    }
   }
 
   next(): RankingPrompt {
@@ -71,21 +44,6 @@ export class RankingSession {
   answer(answer: RankingAnswer): RankingPrompt {
     if (this.#prompt.type === "done") {
       throw new Error("This ranking session is already complete");
-    }
-
-    if (this.#prompt.type === "bucket") {
-      if (!("bucket" in answer)) {
-        throw new Error("The outstanding prompt requires a bucket answer");
-      }
-
-      const bounds = boundsForBucket(answer.bucket, this.#rankedItems.length);
-      this.#low = bounds.low;
-      this.#high = bounds.high;
-      return this.#advance();
-    }
-
-    if (!("better" in answer)) {
-      throw new Error("The outstanding prompt requires a comparison answer");
     }
 
     const middle = Math.floor((this.#low + this.#high) / 2);

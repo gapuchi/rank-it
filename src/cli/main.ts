@@ -11,28 +11,34 @@ import {
   type CatalogRankingSession,
   type CatalogRepository,
   type RankingPrompt,
+  type UserRepository,
 } from "../core/index.js";
 import { parseCategory } from "../core/types.js";
 import { SqliteCatalogRepository } from "../storage/index.js";
+
+interface RankItRepository extends CatalogRepository, UserRepository {}
 
 interface CliDependencies {
   readonly ask: (question: string) => Promise<string>;
   readonly write: (message: string) => void;
   readonly databasePath: string;
+  readonly defaultUserName?: string;
   readonly generateId: () => string;
-  readonly createRepository?: (databasePath: string) => CatalogRepository;
+  readonly createRepository?: (databasePath: string) => RankItRepository;
 }
 
 const usage = `rank-it — track and rank what you have completed
 
 Usage:
-  npm run rank-it -- add <category> <title> [--year <year>] [--notes <notes>]
-  npm run rank-it -- list <category>
-  npm run rank-it -- delete <category> <item-id>
-  npm run rank-it -- rerank <category> <item-id>
+  npm run rank-it -- users list
+  npm run rank-it -- users create <name>
+  npm run rank-it -- add <category> <title> [--user <name>] [--year <year>] [--notes <notes>]
+  npm run rank-it -- list <category> [--user <name>]
+  npm run rank-it -- delete <category> <item-id> [--user <name>]
+  npm run rank-it -- rerank <category> <item-id> [--user <name>]
 
 Categories: movies, tv-shows, video-games
-Set RANK_IT_DB to override the database location.`;
+Set RANK_IT_USER for the default user name. Set RANK_IT_DB to override the database location.`;
 
 export async function runCli(
   argv: readonly string[],
@@ -45,6 +51,7 @@ export async function runCli(
     options: {
       help: { type: "boolean", short: "h" },
       notes: { type: "string" },
+      user: { type: "string" },
       year: { type: "string" },
     },
   });
@@ -54,26 +61,34 @@ export async function runCli(
     return;
   }
 
-  const [command, categoryValue] = positionals;
-  if (
-    command !== "add" &&
-    command !== "list" &&
-    command !== "delete" &&
-    command !== "rerank"
-  ) {
-    throw new Error(`Unknown command "${command}"\n\n${usage}`);
-  }
-  if (categoryValue === undefined) {
-    throw new Error(`A category is required\n\n${usage}`);
-  }
-  const category = parseCategory(categoryValue);
-
+  const [command] = positionals;
   const createRepository =
     dependencies.createRepository ?? createSqliteRepository;
   const repository = createRepository(dependencies.databasePath);
-  const service = new CatalogService(repository, dependencies.generateId);
 
   try {
+    if (command === "users") {
+      await runUsersCommand(positionals, repository, dependencies);
+      return;
+    }
+
+    if (
+      command !== "add" &&
+      command !== "list" &&
+      command !== "delete" &&
+      command !== "rerank"
+    ) {
+      throw new Error(`Unknown command "${command}"\n\n${usage}`);
+    }
+
+    const categoryValue = positionals[1];
+    if (categoryValue === undefined) {
+      throw new Error(`A category is required\n\n${usage}`);
+    }
+    const category = parseCategory(categoryValue);
+    const user = resolveUser(repository, values.user, dependencies);
+    const service = new CatalogService(repository, dependencies.generateId);
+
     switch (command) {
       case "add": {
         const title = positionals.slice(2).join(" ");
@@ -83,6 +98,7 @@ export async function runCli(
         const year =
           values.year === undefined ? undefined : Number(values.year);
         const session = service.addItem({
+          userId: user.id,
           category,
           title,
           ...(year === undefined ? {} : { year }),
@@ -90,14 +106,14 @@ export async function runCli(
         });
         const result = await completeRanking(session, dependencies);
         dependencies.write(
-          `Ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)})`,
+          `Ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
         );
         return;
       }
       case "list": {
-        const items = service.list(category);
+        const items = service.list(user.id, category);
         if (items.length === 0) {
-          dependencies.write(`No ranked items in ${category}.`);
+          dependencies.write(`No ranked items in ${category} for ${user.name}.`);
           return;
         }
         for (const item of items) {
@@ -112,18 +128,18 @@ export async function runCli(
       }
       case "delete": {
         const itemId = requireItemId(positionals);
-        service.delete(category, itemId);
-        dependencies.write(`Deleted ${itemId} from ${category}.`);
+        service.delete(user.id, category, itemId);
+        dependencies.write(`Deleted ${itemId} from ${category} for ${user.name}.`);
         return;
       }
       case "rerank": {
         const itemId = requireItemId(positionals);
         const result = await completeRanking(
-          service.rerank(category, itemId),
+          service.rerank(user.id, category, itemId),
           dependencies,
         );
         dependencies.write(
-          `Re-ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)})`,
+          `Re-ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
         );
       }
     }
@@ -132,7 +148,60 @@ export async function runCli(
   }
 }
 
-function createSqliteRepository(databasePath: string): CatalogRepository {
+async function runUsersCommand(
+  positionals: readonly string[],
+  repository: UserRepository,
+  dependencies: Pick<CliDependencies, "write">,
+): Promise<void> {
+  const subcommand = positionals[1];
+  if (subcommand === "list") {
+    const users = repository.listUsers();
+    if (users.length === 0) {
+      dependencies.write("No users yet. Create one with: users create <name>");
+      return;
+    }
+    for (const user of users) {
+      dependencies.write(`${user.name}  (${user.id})`);
+    }
+    return;
+  }
+
+  if (subcommand === "create") {
+    const name = positionals.slice(2).join(" ");
+    if (name.length === 0) {
+      throw new Error("A user name is required");
+    }
+    const user = repository.createUser(name);
+    dependencies.write(`Created user "${user.name}" (${user.id})`);
+    return;
+  }
+
+  throw new Error(
+    `Unknown users subcommand "${subcommand ?? ""}"\n\n${usage}`,
+  );
+}
+
+function resolveUser(
+  repository: UserRepository,
+  userFlag: string | undefined,
+  dependencies: Pick<CliDependencies, "defaultUserName" | "write">,
+): { id: string; name: string } {
+  const requestedName = userFlag ?? dependencies.defaultUserName ?? "default";
+  const existing = repository.findUserByName(requestedName);
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  if (requestedName.toLowerCase() === "default") {
+    return repository.createUser("default");
+  }
+
+  throw new Error(
+    `User "${requestedName}" was not found. Create them with: users create ${requestedName}`,
+  );
+}
+
+function createSqliteRepository(databasePath: string): RankItRepository {
   mkdirSync(dirname(databasePath), { recursive: true });
   return new SqliteCatalogRepository(databasePath);
 }
@@ -152,32 +221,11 @@ async function completeRanking(
   let prompt = session.next();
 
   while (prompt.type !== "done") {
-    if (prompt.type === "bucket") {
-      const answer = await askBucket(dependencies);
-      prompt = session.answer({ bucket: answer });
-    } else {
-      const better = await askComparison(prompt, dependencies);
-      prompt = session.answer({ better });
-    }
+    const better = await askComparison(prompt, dependencies);
+    prompt = session.answer({ better });
   }
 
   return prompt;
-}
-
-async function askBucket(
-  dependencies: Pick<CliDependencies, "ask" | "write">,
-): Promise<"great" | "okay" | "bad"> {
-  while (true) {
-    const answer = (
-      await dependencies.ask("Initial impression? [g]reat, [o]kay, [b]ad: ")
-    )
-      .trim()
-      .toLowerCase();
-    if (answer === "g" || answer === "great") return "great";
-    if (answer === "o" || answer === "okay") return "okay";
-    if (answer === "b" || answer === "bad") return "bad";
-    dependencies.write("Please enter great, okay, or bad.");
-  }
 }
 
 async function askComparison(
@@ -214,11 +262,15 @@ async function main(): Promise<void> {
     output: process.stdout,
   });
 
+  const defaultUserName = process.env.RANK_IT_USER;
   try {
     await runCli(process.argv.slice(2), {
       ask: (question) => readline.question(question),
       write: (message) => console.log(message),
       databasePath: defaultDatabasePath(process.env),
+      ...(defaultUserName === undefined
+        ? {}
+        : { defaultUserName }),
       generateId: randomUUID,
     });
   } finally {

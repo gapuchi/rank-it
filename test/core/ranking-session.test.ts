@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  boundsForBucket,
-  RankingSession,
-} from "../../src/core/ranking-session.js";
+import { RankingSession } from "../../src/core/ranking-session.js";
 import { scoreForPosition } from "../../src/core/score.js";
 import { parseCategory, type Item } from "../../src/core/types.js";
 
@@ -25,16 +22,20 @@ describe("RankingSession", () => {
     });
   });
 
-  it("places an item using a bucket followed by binary comparisons", () => {
+  it("places an item using binary comparisons across the full list", () => {
     const existing = Array.from({ length: 9 }, (_, index) => item(index + 1));
     const candidate = item(10);
     const session = new RankingSession(candidate, existing);
 
-    expect(session.answer({ bucket: "okay" })).toMatchObject({
+    expect(session.next()).toMatchObject({
       type: "compare",
       against: item(5),
     });
     expect(session.answer({ better: true })).toMatchObject({
+      type: "compare",
+      against: item(3),
+    });
+    expect(session.answer({ better: false })).toMatchObject({
       type: "compare",
       against: item(4),
     });
@@ -44,10 +45,38 @@ describe("RankingSession", () => {
     });
   });
 
-  it("uses logarithmic comparisons inside a bucket", () => {
+  it("compares against the only existing item when adding a second", () => {
+    const session = new RankingSession(item(2), [item(1)]);
+
+    expect(session.next()).toMatchObject({
+      type: "compare",
+      against: item(1),
+    });
+    expect(session.answer({ better: true })).toEqual({
+      type: "done",
+      item: { ...item(2), position: 1, score: 10 },
+    });
+  });
+
+  it("compares against the second game when adding a third after ranking great", () => {
+    const existing = [item(1), item(2)];
+    const candidate = item(3);
+    const session = new RankingSession(candidate, existing);
+
+    expect(session.next()).toMatchObject({
+      type: "compare",
+      against: item(2),
+    });
+    expect(session.answer({ better: true })).toMatchObject({
+      type: "compare",
+      against: item(1),
+    });
+  });
+
+  it("uses logarithmic comparisons for large lists", () => {
     const existing = Array.from({ length: 99 }, (_, index) => item(index + 1));
     const session = new RankingSession(item(100), existing);
-    let prompt = session.answer({ bucket: "okay" });
+    let prompt = session.next();
     let comparisonCount = 0;
 
     while (prompt.type === "compare") {
@@ -55,28 +84,13 @@ describe("RankingSession", () => {
       prompt = session.answer({ better: true });
     }
 
-    expect(comparisonCount).toBeLessThanOrEqual(6);
+    expect(comparisonCount).toBeLessThanOrEqual(7);
   });
 
   it("rejects rankings that mix categories", () => {
     expect(
       () => new RankingSession(item(2, "movies"), [item(1, "tv-shows")]),
     ).toThrow("must share a category");
-  });
-
-  it("requires an answer matching the outstanding prompt", () => {
-    const session = new RankingSession(item(2), [item(1)]);
-
-    expect(() => session.answer({ better: true })).toThrow("bucket answer");
-  });
-});
-
-describe("boundsForBucket", () => {
-  it("uses overlapping thirds so every bucket remains usable", () => {
-    expect(boundsForBucket("great", 9)).toEqual({ low: 0, high: 3 });
-    expect(boundsForBucket("okay", 9)).toEqual({ low: 3, high: 6 });
-    expect(boundsForBucket("bad", 9)).toEqual({ low: 6, high: 9 });
-    expect(boundsForBucket("bad", 1)).toEqual({ low: 0, high: 1 });
   });
 });
 

@@ -8,6 +8,7 @@ import { scoreForPosition } from "./score.js";
 import type { Category, Item, RankedItem } from "./types.js";
 
 export interface AddItemInput {
+  readonly userId: string;
   readonly category: Category;
   readonly title: string;
   readonly year?: number;
@@ -16,6 +17,7 @@ export interface AddItemInput {
 
 export class CatalogRankingSession {
   readonly #repository: CatalogRepository;
+  readonly #userId: string;
   readonly #category: Category;
   readonly #originalItems: readonly Item[];
   readonly #session: RankingSession;
@@ -23,10 +25,12 @@ export class CatalogRankingSession {
 
   constructor(
     repository: CatalogRepository,
+    userId: string,
     item: Item,
     rankedItems: readonly Item[],
   ) {
     this.#repository = repository;
+    this.#userId = userId;
     this.#category = item.category;
     this.#originalItems = [...rankedItems];
     this.#session = new RankingSession(item, rankedItems);
@@ -51,7 +55,7 @@ export class CatalogRankingSession {
     const { position: _, score: __, ...item } = prompt.item;
     const nextItems = [...this.#originalItems];
     nextItems.splice(prompt.item.position - 1, 0, item);
-    this.#repository.saveRanking(this.#category, nextItems);
+    this.#repository.saveRanking(this.#userId, this.#category, nextItems);
     this.#saved = true;
   }
 }
@@ -67,12 +71,20 @@ export class CatalogService {
 
   addItem(input: AddItemInput): CatalogRankingSession {
     const item = this.#buildItem(input);
-    const rankedItems = this.#repository.getRankedItems(input.category);
-    return new CatalogRankingSession(this.#repository, item, rankedItems);
+    const rankedItems = this.#repository.getRankedItems(
+      input.userId,
+      input.category,
+    );
+    return new CatalogRankingSession(
+      this.#repository,
+      input.userId,
+      item,
+      rankedItems,
+    );
   }
 
-  list(category: Category): readonly RankedItem[] {
-    const items = this.#repository.getRankedItems(category);
+  list(userId: string, category: Category): readonly RankedItem[] {
+    const items = this.#repository.getRankedItems(userId, category);
     return items.map((item, index) => ({
       ...item,
       position: index + 1,
@@ -80,25 +92,34 @@ export class CatalogService {
     }));
   }
 
-  delete(category: Category, itemId: string): void {
-    const items = this.#repository.getRankedItems(category);
+  delete(userId: string, category: Category, itemId: string): void {
+    const items = this.#repository.getRankedItems(userId, category);
     const remainingItems = items.filter(({ id }) => id !== itemId);
     if (remainingItems.length === items.length) {
       throw new Error(`Item "${itemId}" was not found in ${category}`);
     }
 
-    this.#repository.saveRanking(category, remainingItems);
+    this.#repository.saveRanking(userId, category, remainingItems);
   }
 
-  rerank(category: Category, itemId: string): CatalogRankingSession {
-    const items = this.#repository.getRankedItems(category);
+  rerank(
+    userId: string,
+    category: Category,
+    itemId: string,
+  ): CatalogRankingSession {
+    const items = this.#repository.getRankedItems(userId, category);
     const item = items.find(({ id }) => id === itemId);
     if (item === undefined) {
       throw new Error(`Item "${itemId}" was not found in ${category}`);
     }
 
     const otherItems = items.filter(({ id }) => id !== itemId);
-    return new CatalogRankingSession(this.#repository, item, otherItems);
+    return new CatalogRankingSession(
+      this.#repository,
+      userId,
+      item,
+      otherItems,
+    );
   }
 
   #buildItem(input: AddItemInput): Item {

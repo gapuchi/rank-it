@@ -2,6 +2,11 @@ export const categories = ["movies", "tv-shows", "video-games"] as const;
 
 export type Category = (typeof categories)[number];
 
+export interface User {
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface Item {
   readonly id: string;
   readonly category: Category;
