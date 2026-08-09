@@ -316,16 +316,65 @@ function defaultDatabasePath(environment: NodeJS.ProcessEnv): string {
   return join(dataDirectory, "rank-it", "rank-it.db");
 }
 
+/**
+ * Reads a single keypress from an interactive terminal so answers like the
+ * ranking `[y/n]` prompt submit as soon as a key is pressed, with no Enter
+ * required. Control keys (arrows, Escape, Enter) are ignored so the caller can
+ * keep waiting for a real character; Ctrl+C aborts.
+ */
+function createKeypressAsker(
+  input: NodeJS.ReadStream,
+  output: NodeJS.WriteStream,
+): (question: string) => Promise<string> {
+  return (question) =>
+    new Promise<string>((resolve, reject) => {
+      output.write(question);
+      const wasRaw = input.isRaw ?? false;
+      input.setRawMode(true);
+      input.resume();
+
+      const cleanup = (): void => {
+        input.off("data", onData);
+        input.setRawMode(wasRaw);
+        input.pause();
+      };
+
+      const onData = (data: Buffer): void => {
+        const char = data.toString("utf8").charAt(0);
+        if (char === "\u0003") {
+          cleanup();
+          output.write("\n");
+          reject(new Error("Cancelled"));
+          return;
+        }
+        if (char === "" || char.charCodeAt(0) < 0x20) {
+          return;
+        }
+        cleanup();
+        output.write(`${char}\n`);
+        resolve(char);
+      };
+
+      input.on("data", onData);
+    });
+}
+
 async function main(): Promise<void> {
-  const readline = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  const input = process.stdin;
+  const output = process.stdout;
+
+  let readline: ReturnType<typeof createInterface> | undefined;
+  const ask = input.isTTY
+    ? createKeypressAsker(input, output)
+    : (question: string): Promise<string> => {
+        readline ??= createInterface({ input, output });
+        return readline.question(question);
+      };
 
   const defaultUserName = process.env.RANK_IT_USER;
   try {
     await runCli(process.argv.slice(2), {
-      ask: (question) => readline.question(question),
+      ask,
       write: (message) => console.log(message),
       databasePath: defaultDatabasePath(process.env),
       ...(defaultUserName === undefined
@@ -334,7 +383,7 @@ async function main(): Promise<void> {
       generateId: randomUUID,
     });
   } finally {
-    readline.close();
+    readline?.close();
   }
 }
 
