@@ -9,6 +9,7 @@ import { createInterface } from "node:readline/promises";
 import {
   CatalogService,
   type CatalogRankingSession,
+  type CatalogRepository,
   type RankingPrompt,
 } from "../core/index.js";
 import { parseCategory } from "../core/types.js";
@@ -19,6 +20,7 @@ interface CliDependencies {
   readonly write: (message: string) => void;
   readonly databasePath: string;
   readonly generateId: () => string;
+  readonly createRepository?: (databasePath: string) => CatalogRepository;
 }
 
 const usage = `rank-it — track and rank what you have completed
@@ -66,8 +68,9 @@ export async function runCli(
   }
   const category = parseCategory(categoryValue);
 
-  mkdirSync(dirname(dependencies.databasePath), { recursive: true });
-  const repository = new SqliteCatalogRepository(dependencies.databasePath);
+  const createRepository =
+    dependencies.createRepository ?? createSqliteRepository;
+  const repository = createRepository(dependencies.databasePath);
   const service = new CatalogService(repository, dependencies.generateId);
 
   try {
@@ -127,6 +130,11 @@ export async function runCli(
   } finally {
     repository.close();
   }
+}
+
+function createSqliteRepository(databasePath: string): CatalogRepository {
+  mkdirSync(dirname(databasePath), { recursive: true });
+  return new SqliteCatalogRepository(databasePath);
 }
 
 function requireItemId(positionals: readonly string[]): string {

@@ -27,6 +27,8 @@ class MemoryCatalogRepository implements CatalogRepository {
   seed(category: Category, items: readonly Item[]): void {
     this.saveRanking(category, items);
   }
+
+  close(): void {}
 }
 
 function item(id: string, category: Category = "movies"): Item {
