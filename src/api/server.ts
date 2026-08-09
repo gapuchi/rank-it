@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
+
+import { getRequestListener } from "@hono/node-server";
+import { Hono, type Context } from "hono";
 
 import {
   CatalogService,
@@ -62,136 +64,68 @@ export function createApiServer(options: ApiServerOptions): Server {
     webRoot: options.webRoot === undefined ? undefined : resolve(options.webRoot),
   };
 
-  return createServer((request, response) => {
-    handle(request, response, handlers).catch((error: unknown) => {
-      respondToError(response, error);
-    });
-  });
+  const app = buildApp(handlers);
+  return createServer(getRequestListener(app.fetch));
 }
 
-async function handle(
-  request: IncomingMessage,
-  response: ServerResponse,
-  handlers: Handlers,
-): Promise<void> {
-  const method = request.method ?? "GET";
-  const url = new URL(request.url ?? "/", "http://localhost");
-  const segments = url.pathname.split("/").filter((part) => part.length > 0);
-
-  if (segments[0] === "api") {
-    await handleApi(method, segments.slice(1), request, response, handlers);
-    return;
-  }
-
-  if (method === "GET" && handlers.webRoot !== undefined) {
-    await serveStatic(url.pathname, handlers.webRoot, response);
-    return;
-  }
-
-  throw new HttpError(404, "Not found");
-}
-
-async function handleApi(
-  method: string,
-  segments: readonly string[],
-  request: IncomingMessage,
-  response: ServerResponse,
-  handlers: Handlers,
-): Promise<void> {
+function buildApp(handlers: Handlers): Hono {
   const { service, users, sessions } = handlers;
+  const app = new Hono();
 
-  if (segments[0] === "health" && segments.length === 1) {
-    sendJson(response, 200, { status: "ok" });
-    return;
-  }
+  app.get("/api/health", (c) => c.json({ status: "ok" }));
 
-  if (segments[0] === "categories" && segments.length === 1) {
-    if (method !== "GET") throw methodNotAllowed();
-    sendJson(response, 200, { categories });
-    return;
-  }
+  app.get("/api/categories", (c) => c.json({ categories }));
 
-  if (segments[0] === "users" && segments.length === 1) {
-    if (method === "GET") {
-      sendJson(response, 200, { users: users.listUsers() });
-      return;
+  app.get("/api/users", (c) => c.json({ users: users.listUsers() }));
+
+  app.post("/api/users", async (c) => {
+    const body = await readJson(c);
+    const name = body["name"];
+    if (typeof name !== "string" || name.trim().length === 0) {
+      throw new HttpError(400, "A user name is required");
     }
-    if (method === "POST") {
-      const body = await readJson(request);
-      const name = body["name"];
-      if (typeof name !== "string" || name.trim().length === 0) {
-        throw new HttpError(400, "A user name is required");
-      }
-      const user = runCatch(() => users.createUser(name));
-      sendJson(response, 201, { user });
-      return;
-    }
-    throw methodNotAllowed();
-  }
+    const user = runCatch(() => users.createUser(name));
+    return c.json({ user }, 201);
+  });
 
-  // /users/:userId/categories/:category/items ...
-  if (
-    segments[0] === "users" &&
-    segments[2] === "categories" &&
-    segments[4] === "items"
-  ) {
-    const userId = requireUser(users, segments[1]);
-    const category = validateCategory(segments[3]);
+  const itemsPath = "/api/users/:userId/categories/:category/items";
 
-    if (segments.length === 5) {
-      if (method === "GET") {
-        sendJson(response, 200, { items: service.list(userId, category) });
-        return;
-      }
-      if (method === "POST") {
-        const title = await readTitle(request);
-        const session = runCatch(() =>
-          service.addItem({ userId, category, title }),
-        );
-        sendJson(response, 201, sessions.start(session));
-        return;
-      }
-      throw methodNotAllowed();
-    }
+  app.get(itemsPath, (c) => {
+    const userId = requireUser(users, c.req.param("userId"));
+    const category = validateCategory(c.req.param("category"));
+    return c.json({ items: service.list(userId, category) });
+  });
 
-    const itemId = segments[5];
-    if (itemId !== undefined && segments.length === 6) {
-      if (method === "DELETE") {
-        runCatch(() => service.delete(userId, category, itemId));
-        response.writeHead(204);
-        response.end();
-        return;
-      }
-      throw methodNotAllowed();
-    }
+  app.post(itemsPath, async (c) => {
+    const userId = requireUser(users, c.req.param("userId"));
+    const category = validateCategory(c.req.param("category"));
+    const title = await readTitle(c);
+    const session = runCatch(() => service.addItem({ userId, category, title }));
+    return c.json(sessions.start(session), 201);
+  });
 
-    if (
-      itemId !== undefined &&
-      segments[6] === "rerank" &&
-      segments.length === 7
-    ) {
-      if (method !== "POST") throw methodNotAllowed();
-      const session = runCatch(() =>
-        service.rerank(userId, category, itemId),
-      );
-      sendJson(response, 201, sessions.start(session));
-      return;
-    }
-  }
+  app.delete(`${itemsPath}/:id`, (c) => {
+    const userId = requireUser(users, c.req.param("userId"));
+    const category = validateCategory(c.req.param("category"));
+    runCatch(() => service.delete(userId, category, c.req.param("id")));
+    return c.body(null, 204);
+  });
 
-  // /sessions/:id/answer
-  if (
-    segments[0] === "sessions" &&
-    segments[2] === "answer" &&
-    segments.length === 3
-  ) {
-    if (method !== "POST") throw methodNotAllowed();
-    const sessionId = segments[1];
-    if (sessionId === undefined) throw new HttpError(404, "Not found");
-    const answer = await readAnswer(request);
+  app.post(`${itemsPath}/:id/rerank`, (c) => {
+    const userId = requireUser(users, c.req.param("userId"));
+    const category = validateCategory(c.req.param("category"));
+    const session = runCatch(() =>
+      service.rerank(userId, category, c.req.param("id")),
+    );
+    return c.json(sessions.start(session), 201);
+  });
+
+  app.post("/api/sessions/:id/answer", async (c) => {
+    const sessionId = c.req.param("id");
+    const answer = await readAnswer(c);
     try {
       const prompt = sessions.answer(sessionId, answer);
-      sendJson(response, 200, { prompt });
+      return c.json({ prompt });
     } catch (error: unknown) {
       if (error instanceof SessionNotFoundError) {
         throw new HttpError(404, error.message);
@@ -201,14 +135,26 @@ async function handleApi(
       }
       throw error;
     }
-    return;
+  });
+
+  // Unknown API routes must not fall through to the static handler.
+  app.all("/api/*", () => {
+    throw new HttpError(404, "Not found");
+  });
+
+  if (handlers.webRoot !== undefined) {
+    const webRoot = handlers.webRoot;
+    app.get("*", (c) => serveStatic(c.req.path, webRoot));
   }
 
-  throw new HttpError(404, "Not found");
+  app.notFound(() => jsonResponse(404, { error: "Not found" }));
+  app.onError((error) => respondToError(error));
+
+  return app;
 }
 
-async function readTitle(request: IncomingMessage): Promise<string> {
-  const body = await readJson(request);
+async function readTitle(c: Context): Promise<string> {
+  const body = await readJson(c);
   const title = body["title"];
   if (typeof title !== "string" || title.trim().length === 0) {
     throw new HttpError(400, "A title is required");
@@ -216,8 +162,8 @@ async function readTitle(request: IncomingMessage): Promise<string> {
   return title;
 }
 
-async function readAnswer(request: IncomingMessage): Promise<RankingAnswer> {
-  const body = await readJson(request);
+async function readAnswer(c: Context): Promise<RankingAnswer> {
+  const body = await readJson(c);
   const better = body["better"];
   if (typeof better !== "boolean") {
     throw new HttpError(400, "Answer must include a boolean better flag");
@@ -265,21 +211,11 @@ function runCatch<T>(action: () => T): T {
   }
 }
 
-async function readJson(
-  request: IncomingMessage,
-): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const buffer = chunk as Buffer;
-    size += buffer.length;
-    if (size > 1_000_000) {
-      throw new HttpError(413, "Request body is too large");
-    }
-    chunks.push(buffer);
+async function readJson(c: Context): Promise<Record<string, unknown>> {
+  const raw = (await c.req.text()).trim();
+  if (raw.length > 1_000_000) {
+    throw new HttpError(413, "Request body is too large");
   }
-
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
   if (raw.length === 0) {
     return {};
   }
@@ -301,8 +237,7 @@ async function readJson(
 async function serveStatic(
   pathname: string,
   webRoot: string,
-  response: ServerResponse,
-): Promise<void> {
+): Promise<Response> {
   const relative =
     pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   const target = normalize(join(webRoot, relative));
@@ -317,54 +252,40 @@ async function serveStatic(
     // Fall back to the SPA entry point for unknown non-file routes.
     try {
       file = await readFile(join(webRoot, "index.html"));
-      response.writeHead(200, {
-        "content-type": contentTypes[".html"] ?? "text/html",
-      });
-      response.end(file);
-      return;
+      return fileResponse(file, contentTypes[".html"] ?? "text/html");
     } catch {
       throw new HttpError(404, "Not found");
     }
   }
 
   const type = contentTypes[extname(target)] ?? "application/octet-stream";
-  response.writeHead(200, { "content-type": type });
-  response.end(file);
+  return fileResponse(file, type);
 }
 
-function sendJson(
-  response: ServerResponse,
-  status: number,
-  body: unknown,
-): void {
-  const payload = JSON.stringify(body);
-  response.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
+function fileResponse(file: Buffer, contentType: string): Response {
+  return new Response(new Uint8Array(file), {
+    status: 200,
+    headers: { "content-type": contentType },
   });
-  response.end(payload);
 }
 
-function methodNotAllowed(): HttpError {
-  return new HttpError(405, "Method not allowed");
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
-function respondToError(response: ServerResponse, error: unknown): void {
-  if (response.headersSent) {
-    response.end();
-    return;
-  }
-
+function respondToError(error: unknown): Response {
   if (error instanceof HttpError) {
-    sendJson(response, error.status, { error: error.message });
-    return;
+    return jsonResponse(error.status, { error: error.message });
   }
 
   if (error instanceof SessionNotFoundError) {
-    sendJson(response, 404, { error: error.message });
-    return;
+    return jsonResponse(404, { error: error.message });
   }
 
   const message = error instanceof Error ? error.message : String(error);
   console.error("Unhandled API error:", message);
-  sendJson(response, 500, { error: "Internal server error" });
+  return jsonResponse(500, { error: "Internal server error" });
 }

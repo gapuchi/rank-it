@@ -25,3 +25,5 @@ main
 - Catalog ranking sessions save only on completion, so an interrupted re-rank leaves the previous persisted order intact.
 - Replacing a category ranking is one SQLite transaction; validation happens before the existing order is deleted.
 - The CLI stores data under the XDG data directory by default and supports `RANK_IT_DB` for explicit locations and isolated tests.
+- The API uses Hono for routing; `@hono/node-server`'s `getRequestListener` wraps `app.fetch` so `createApiServer` still returns a `node:http` `Server`, leaving tests and `main.ts` untouched.
+- Unknown `/api/*` routes need an explicit catch-all so they return JSON 404s instead of falling through to the static/SPA handler.

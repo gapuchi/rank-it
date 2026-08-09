@@ -21,8 +21,10 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.0",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
-    "csv-parse": "^7.0.2"
+    "csv-parse": "^7.0.2",
+    "hono": "^4.13.1"
   }
 }

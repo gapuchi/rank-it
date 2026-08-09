@@ -181,3 +181,4 @@ Each increment is one local commit on `main`, in order. No remote operations or 
 
 2026-08-09: Added a Nix flake development shell to Commit 1 after confirming Nix is the project's development-environment convention.
 2026-08-09: Removed year and notes from the item model to keep the initial catalog focused on ranking.
+2026-08-09: Adopted the Hono router (served on Node via `@hono/node-server`) for the HTTP API in place of hand-rolled `node:http` request routing, keeping the same `createApiServer` → `http.Server` contract and API surface.

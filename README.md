@@ -101,7 +101,8 @@ same users the CLI manages.
 
 ### HTTP API
 
-The server exposes a small JSON API under `/api`. Placing an item takes several
+The server is built on the [Hono](https://hono.dev) router (run on Node via
+`@hono/node-server`) and exposes a small JSON API under `/api`. Placing an item takes several
 comparisons, so adding or re-ranking returns a `sessionId` plus the first
 `prompt`; answer prompts until one has `type: "done"`. An item added to an empty
 category needs no comparisons and comes back done with a `null` session.
