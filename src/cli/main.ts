@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,6 +7,8 @@ import { createInterface } from "node:readline/promises";
 import { Command, CommanderError } from "commander";
 
 import {
+  type BulkRankingPrompt,
+  type BulkRankingSession,
   CatalogService,
   type CatalogRankingSession,
   type CatalogRepository,
@@ -15,6 +17,7 @@ import {
 } from "../core/index.js";
 import { parseCategory } from "../core/types.js";
 import { SqliteCatalogRepository } from "../storage/index.js";
+import { parseTitleCsv } from "./csv.js";
 
 interface RankItRepository extends CatalogRepository, UserRepository {}
 
@@ -28,6 +31,7 @@ interface CliDependencies {
 }
 
 type UserOption = { user?: string };
+type ImportOptions = UserOption & { replace?: boolean };
 
 export async function runCli(
   argv: readonly string[],
@@ -105,6 +109,42 @@ export async function runCli(
         `Ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
       );
     });
+
+  program
+    .command("import")
+    .description("Import and rank unordered titles from a CSV file")
+    .argument("<category>", "movies | tv-shows | video-games")
+    .argument("<file>", 'CSV file with a "title" column')
+    .option("--user <name>", "user name")
+    .option("--replace", "replace the existing category instead of appending")
+    .action(
+      async (
+        categoryValue: string,
+        file: string,
+        options: ImportOptions,
+      ) => {
+        const category = parseCategory(categoryValue);
+        const titles = parseTitleCsv(readFileSync(file, "utf8"));
+        if (titles.length === 0) {
+          throw new Error("CSV does not contain any titles");
+        }
+
+        const user = resolveUser(repository, options.user, dependencies);
+        const service = new CatalogService(repository, dependencies.generateId);
+        const result = await completeBulkRanking(
+          service.importUnordered({
+            userId: user.id,
+            category,
+            titles,
+            mode: options.replace === true ? "replace" : "append",
+          }),
+          dependencies,
+        );
+        dependencies.write(
+          `Imported and ranked ${result.imported} ${result.imported === 1 ? "item" : "items"} in ${category} for ${user.name}.`,
+        );
+      },
+    );
 
   program
     .command("list")
@@ -218,16 +258,46 @@ async function completeRanking(
   return prompt;
 }
 
+async function completeBulkRanking(
+  session: BulkRankingSession,
+  dependencies: Pick<CliDependencies, "ask" | "write">,
+): Promise<Extract<BulkRankingPrompt, { type: "done" }>> {
+  let prompt = session.next();
+
+  while (prompt.type !== "done") {
+    const better = await askBulkComparison(prompt, dependencies);
+    prompt = session.answer({ better });
+  }
+
+  return prompt;
+}
+
+async function askBulkComparison(
+  prompt: Extract<BulkRankingPrompt, { type: "compare" }>,
+  dependencies: Pick<CliDependencies, "ask" | "write">,
+): Promise<boolean> {
+  return askYesOrNo(
+    `Ranking ${prompt.current}/${prompt.total}: Was "${prompt.item.title}" better than "${prompt.against.title}"? [y/n]: `,
+    dependencies,
+  );
+}
+
 async function askComparison(
   prompt: Extract<RankingPrompt, { type: "compare" }>,
   dependencies: Pick<CliDependencies, "ask" | "write">,
 ): Promise<boolean> {
+  return askYesOrNo(
+    `Was "${prompt.item.title}" better than "${prompt.against.title}"? [y/n]: `,
+    dependencies,
+  );
+}
+
+async function askYesOrNo(
+  question: string,
+  dependencies: Pick<CliDependencies, "ask" | "write">,
+): Promise<boolean> {
   while (true) {
-    const answer = (
-      await dependencies.ask(
-        `Was "${prompt.item.title}" better than "${prompt.against.title}"? [y/n]: `,
-      )
-    )
+    const answer = (await dependencies.ask(question))
       .trim()
       .toLowerCase();
     if (answer === "y" || answer === "yes") return true;

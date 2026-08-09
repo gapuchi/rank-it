@@ -104,6 +104,95 @@ describe("CatalogService", () => {
     ).toEqual(["best", "new-1", "worst"]);
   });
 
+  it("bulk-ranks unordered titles and persists each completed item", () => {
+    const { repository, service, userId } = createFixture();
+    const session = service.importUnordered({
+      userId,
+      category: "movies",
+      titles: ["Arrival", "Moonlight", "Parasite"],
+    });
+
+    expect(session.next()).toMatchObject({
+      type: "compare",
+      item: { title: "Moonlight" },
+      against: { title: "Arrival" },
+      current: 2,
+      total: 3,
+    });
+    expect(
+      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+    ).toEqual(["Arrival"]);
+
+    expect(session.answer({ better: false })).toMatchObject({
+      type: "compare",
+      item: { title: "Parasite" },
+      against: { title: "Moonlight" },
+      current: 3,
+      total: 3,
+    });
+    expect(
+      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+    ).toEqual(["Arrival", "Moonlight"]);
+
+    expect(session.answer({ better: true })).toMatchObject({
+      type: "compare",
+      against: { title: "Arrival" },
+    });
+    expect(session.answer({ better: false })).toEqual({
+      type: "done",
+      imported: 3,
+      total: 3,
+    });
+    expect(
+      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+    ).toEqual(["Arrival", "Parasite", "Moonlight"]);
+  });
+
+  it("appends imports to an existing ranking by default", () => {
+    const { repository, service, userId } = createFixture();
+    repository.seed(userId, "movies", [item("best"), item("worst")]);
+
+    const session = service.importUnordered({
+      userId,
+      category: "movies",
+      titles: ["Middle"],
+    });
+    expect(session.next()).toMatchObject({
+      type: "compare",
+      against: item("worst"),
+    });
+    session.answer({ better: true });
+    expect(session.answer({ better: false })).toEqual({
+      type: "done",
+      imported: 1,
+      total: 1,
+    });
+    expect(
+      repository.getRankedItems(userId, "movies").map(({ id }) => id),
+    ).toEqual(["best", "new-1", "worst"]);
+  });
+
+  it("replaces an existing ranking when requested", () => {
+    const { repository, service, userId } = createFixture();
+    repository.seed(userId, "movies", [item("existing")]);
+
+    const session = service.importUnordered({
+      userId,
+      category: "movies",
+      titles: ["Replacement"],
+      mode: "replace",
+    });
+
+    expect(session.next()).toEqual({
+      type: "done",
+      imported: 1,
+      total: 1,
+    });
+    expect(repository.getRankedItems(userId, "movies")).toEqual([
+      { id: "new-1", category: "movies", title: "Replacement" },
+    ]);
+  });
+
   it("lists items best-first with derived scores", () => {
     const { repository, service, userId } = createFixture();
     repository.seed(userId, "tv-shows", [
@@ -191,5 +280,19 @@ describe("CatalogService", () => {
     expect(() => service.rerank(userId, "movies", "missing")).toThrow(
       "was not found",
     );
+    expect(() =>
+      service.importUnordered({
+        userId,
+        category: "movies",
+        titles: [],
+      }),
+    ).toThrow("At least one title");
+    expect(() =>
+      service.importUnordered({
+        userId,
+        category: "movies",
+        titles: ["Valid", "  "],
+      }),
+    ).toThrow("cannot be empty");
   });
 });

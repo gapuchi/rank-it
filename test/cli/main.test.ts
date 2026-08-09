@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,11 @@ function createHarness() {
   let nextId = 1;
 
   return {
+    writeCsv(name: string, contents: string): string {
+      const path = join(directory, name);
+      writeFileSync(path, contents);
+      return path;
+    },
     async execute(argv: readonly string[], answers: string[] = []) {
       const output: string[] = [];
       await runCli(argv, {
@@ -71,6 +76,43 @@ describe("runCli", () => {
     await expect(
       harness.execute(["list", "video-games"]),
     ).resolves.toEqual(["#1  10.0  item-2  Disco Elysium"]);
+  });
+
+  it("imports and ranks unordered CSV titles", async () => {
+    const harness = createHarness();
+    const csv = harness.writeCsv(
+      "movies.csv",
+      "title\nArrival\nMoonlight\nParasite\n",
+    );
+
+    await expect(
+      harness.execute(
+        ["import", "movies", csv],
+        ["no", "yes", "no"],
+      ),
+    ).resolves.toEqual([
+      "Imported and ranked 3 items in movies for default.",
+    ]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "#1  10.0  item-1  Arrival",
+      "#2  5.0  item-3  Parasite",
+      "#3  0.0  item-2  Moonlight",
+    ]);
+  });
+
+  it("can replace an existing ranking with an imported CSV", async () => {
+    const harness = createHarness();
+    await harness.execute(["add", "movies", "Existing"]);
+    const csv = harness.writeCsv("replacement.csv", "title\nReplacement\n");
+
+    await expect(
+      harness.execute(["import", "movies", csv, "--replace"]),
+    ).resolves.toEqual([
+      "Imported and ranked 1 item in movies for default.",
+    ]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "#1  10.0  item-2  Replacement",
+    ]);
   });
 
   it("creates and scopes rankings to named users", async () => {

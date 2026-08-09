@@ -38,6 +38,27 @@ npm run rank-it -- add video-games "Outer Wilds" --user Alice
 
 The first item in a category is ranked immediately. Every later item is placed with pairwise comparisons against existing entries.
 
+Import unordered titles from a CSV file with a `title` column. Each title is
+placed through the same pairwise comparisons and saved as soon as it is ranked:
+
+```csv
+title
+Arrival
+Moonlight
+Parasite
+```
+
+```sh
+npm run rank-it -- import movies ./movies.csv --user Alice
+```
+
+Imports append to the existing ranking by default. Pass `--replace` to build a
+new ranking for the category from only the imported titles:
+
+```sh
+npm run rank-it -- import movies ./movies.csv --replace
+```
+
 List a category:
 
 ```sh

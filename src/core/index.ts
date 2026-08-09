@@ -1,3 +1,4 @@
+export * from "./bulk-ranking-session.js";
 export * from "./catalog-repository.js";
 export * from "./catalog-service.js";
 export * from "./ranking-session.js";

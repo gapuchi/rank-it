@@ -1,4 +1,5 @@
 import type { CatalogRepository } from "./catalog-repository.js";
+import { BulkRankingSession } from "./bulk-ranking-session.js";
 import {
   RankingSession,
   type RankingAnswer,
@@ -11,6 +12,13 @@ export interface AddItemInput {
   readonly userId: string;
   readonly category: Category;
   readonly title: string;
+}
+
+export interface ImportUnorderedInput {
+  readonly userId: string;
+  readonly category: Category;
+  readonly titles: readonly string[];
+  readonly mode?: "append" | "replace";
 }
 
 export class CatalogRankingSession {
@@ -77,6 +85,37 @@ export class CatalogService {
       this.#repository,
       input.userId,
       item,
+      rankedItems,
+    );
+  }
+
+  importUnordered(input: ImportUnorderedInput): BulkRankingSession {
+    if (input.titles.length === 0) {
+      throw new Error("At least one title is required for import");
+    }
+
+    const titles = input.titles.map((title) => {
+      const trimmed = title.trim();
+      if (trimmed.length === 0) {
+        throw new Error("Imported titles cannot be empty");
+      }
+      return trimmed;
+    });
+    const items = titles.map((title) => ({
+      id: this.#generateId(),
+      category: input.category,
+      title,
+    }));
+    const rankedItems =
+      input.mode === "replace"
+        ? []
+        : this.#repository.getRankedItems(input.userId, input.category);
+
+    return new BulkRankingSession(
+      this.#repository,
+      input.userId,
+      input.category,
+      items,
       rankedItems,
     );
   }
