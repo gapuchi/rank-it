@@ -56,3 +56,41 @@ Data defaults to `~/.local/share/rank-it/rank-it.db`. Override paths and the def
 ```sh
 RANK_IT_DB=/path/to/rank-it.db RANK_IT_USER=Alice npm run rank-it -- list movies
 ```
+
+## HTTP API
+
+The CLI and the HTTP API are both thin adapters over the same core
+`CatalogService`, so they share ranking logic and storage. Start the server:
+
+```sh
+npm run serve
+```
+
+Use `npm run dev` for auto-reload during development. The server reads the same
+`RANK_IT_DB` database as the CLI and can be configured with environment
+variables:
+
+- `PORT` — port to listen on (default `4000`)
+- `HOST` — interface to bind (default `127.0.0.1`)
+- `RANK_IT_DB` — SQLite database path
+- `RANK_IT_USER` — name of the user created on first start (default `default`)
+
+Placing an item takes several comparisons, so adding or re-ranking returns a
+`sessionId` plus the first `prompt`; answer prompts until one has
+`type: "done"`. An item added to an empty category needs no comparisons and
+comes back done with a `null` session.
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/health` | Liveness check |
+| `GET /api/categories` | List categories |
+| `GET /api/users` | List users |
+| `POST /api/users` | Create a user; body `{ name }` |
+| `GET /api/users/:userId/categories/:category/items` | List ranked items |
+| `POST /api/users/:userId/categories/:category/items` | Add an item; body `{ title }` |
+| `DELETE /api/users/:userId/categories/:category/items/:id` | Delete an item |
+| `POST /api/users/:userId/categories/:category/items/:id/rerank` | Start a re-rank session |
+| `POST /api/sessions/:id/answer` | Answer a comparison; body `{ better }` |
+
+Ranking sessions are held in memory in the server process, which suits a
+single-instance deployment.

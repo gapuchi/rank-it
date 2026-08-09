@@ -6,6 +6,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "rank-it": "tsx src/cli/main.ts",
+    "serve": "tsx src/api/main.ts",
+    "dev": "tsx watch src/api/main.ts",
     "test": "vitest run"
   },
   "devDependencies": {
