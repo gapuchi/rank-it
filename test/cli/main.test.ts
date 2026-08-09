@@ -88,7 +88,7 @@ describe("runCli", () => {
     await expect(
       harness.execute(
         ["import", "movies", csv],
-        ["no", "yes", "no"],
+        ["yes", "yes", "no"],
       ),
     ).resolves.toEqual([
       "Imported and ranked 3 items in movies for default.",

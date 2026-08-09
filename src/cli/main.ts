@@ -277,7 +277,7 @@ async function askBulkComparison(
   dependencies: Pick<CliDependencies, "ask" | "write">,
 ): Promise<boolean> {
   return askYesOrNo(
-    `Ranking ${prompt.current}/${prompt.total}: Was "${prompt.item.title}" better than "${prompt.against.title}"? [y/n]: `,
+    `Comparison ${prompt.current}/${prompt.total}: Was "${prompt.item.title}" better than "${prompt.against.title}"? [y/n]: `,
     dependencies,
   );
 }

@@ -104,7 +104,7 @@ describe("CatalogService", () => {
     ).toEqual(["best", "new-1", "worst"]);
   });
 
-  it("bulk-ranks unordered titles and persists each completed item", () => {
+  it("bulk-ranks unordered titles with merge sort and saves once", () => {
     const { repository, service, userId } = createFixture();
     const session = service.importUnordered({
       userId,
@@ -114,29 +114,22 @@ describe("CatalogService", () => {
 
     expect(session.next()).toMatchObject({
       type: "compare",
-      item: { title: "Moonlight" },
-      against: { title: "Arrival" },
-      current: 2,
-      total: 3,
-    });
-    expect(
-      repository.getRankedItems(userId, "movies").map(({ title }) => title),
-    ).toEqual(["Arrival"]);
-
-    expect(session.answer({ better: false })).toMatchObject({
-      type: "compare",
-      item: { title: "Parasite" },
+      item: { title: "Arrival" },
       against: { title: "Moonlight" },
-      current: 3,
-      total: 3,
+      current: 1,
     });
-    expect(
-      repository.getRankedItems(userId, "movies").map(({ title }) => title),
-    ).toEqual(["Arrival", "Moonlight"]);
+    expect(repository.getRankedItems(userId, "movies")).toEqual([]);
 
+    // Arrival > Moonlight, then Arrival > Parasite, then Moonlight < Parasite
     expect(session.answer({ better: true })).toMatchObject({
       type: "compare",
-      against: { title: "Arrival" },
+      item: { title: "Arrival" },
+      against: { title: "Parasite" },
+    });
+    expect(session.answer({ better: true })).toMatchObject({
+      type: "compare",
+      item: { title: "Moonlight" },
+      against: { title: "Parasite" },
     });
     expect(session.answer({ better: false })).toEqual({
       type: "done",
@@ -159,9 +152,16 @@ describe("CatalogService", () => {
     });
     expect(session.next()).toMatchObject({
       type: "compare",
-      against: item("worst"),
+      item: item("best"),
+      against: { title: "Middle" },
     });
-    session.answer({ better: true });
+    // best > Middle
+    expect(session.answer({ better: true })).toMatchObject({
+      type: "compare",
+      item: item("worst"),
+      against: { title: "Middle" },
+    });
+    // Middle > worst
     expect(session.answer({ better: false })).toEqual({
       type: "done",
       imported: 1,

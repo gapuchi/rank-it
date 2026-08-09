@@ -38,8 +38,10 @@ npm run rank-it -- add video-games "Outer Wilds" --user Alice
 
 The first item in a category is ranked immediately. Every later item is placed with pairwise comparisons against existing entries.
 
-Import unordered titles from a CSV file with a `title` column. Each title is
-placed through the same pairwise comparisons and saved as soon as it is ranked:
+Import unordered titles from a CSV file with a `title` column. The import is
+ranked with merge sort (then merged into any existing ranking) so large lists
+stay at O(n log n) comparisons, and the category is saved once the import
+finishes:
 
 ```csv
 title
