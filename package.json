@@ -19,6 +19,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3"
+    "better-sqlite3": "^13.0.3",
+    "commander": "^15.0.0"
   }
 }

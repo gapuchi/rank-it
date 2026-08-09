@@ -3,8 +3,8 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseArgs } from "node:util";
 import { createInterface } from "node:readline/promises";
+import { Command, CommanderError } from "commander";
 
 import {
   CatalogService,
@@ -27,149 +27,156 @@ interface CliDependencies {
   readonly createRepository?: (databasePath: string) => RankItRepository;
 }
 
-const usage = `rank-it — track and rank what you have completed
-
-Usage:
-  npm run rank-it -- users list
-  npm run rank-it -- users create <name>
-  npm run rank-it -- add <category> <title> [--user <name>]
-  npm run rank-it -- list <category> [--user <name>]
-  npm run rank-it -- delete <category> <item-id> [--user <name>]
-  npm run rank-it -- rerank <category> <item-id> [--user <name>]
-
-Categories: movies, tv-shows, video-games
-Set RANK_IT_USER for the default user name. Set RANK_IT_DB to override the database location.`;
+type UserOption = { user?: string };
 
 export async function runCli(
   argv: readonly string[],
   dependencies: CliDependencies,
 ): Promise<void> {
-  const { positionals, values } = parseArgs({
-    args: [...argv],
-    allowPositionals: true,
-    strict: true,
-    options: {
-      help: { type: "boolean", short: "h" },
-      user: { type: "string" },
-    },
-  });
-
-  if (values.help || positionals.length === 0) {
-    dependencies.write(usage);
-    return;
-  }
-
-  const [command] = positionals;
   const createRepository =
     dependencies.createRepository ?? createSqliteRepository;
   const repository = createRepository(dependencies.databasePath);
 
+  const program = new Command();
+  program
+    .name("rank-it")
+    .description("Track and rank movies, TV shows, and video games you have completed")
+    .configureOutput({
+      writeOut: (string) => dependencies.write(string.replace(/\n$/, "")),
+      writeErr: (string) => dependencies.write(string.replace(/\n$/, "")),
+    })
+    .showHelpAfterError()
+    .exitOverride();
+
+  program.action(() => {
+    program.outputHelp();
+  });
+
+  const users = program.command("users").description("Manage users");
+
+  users
+    .command("list")
+    .description("List users")
+    .action(() => {
+      const listed = repository.listUsers();
+      if (listed.length === 0) {
+        dependencies.write("No users yet. Create one with: users create <name>");
+        return;
+      }
+      for (const user of listed) {
+        dependencies.write(`${user.name}  (${user.id})`);
+      }
+    });
+
+  users
+    .command("create")
+    .description("Create a user")
+    .argument("<name...>", "user name")
+    .action((nameParts: string[]) => {
+      const name = nameParts.join(" ").trim();
+      if (name.length === 0) {
+        throw new Error("A user name is required");
+      }
+      const user = repository.createUser(name);
+      dependencies.write(`Created user "${user.name}" (${user.id})`);
+    });
+
+  program
+    .command("add")
+    .description("Add and rank an item")
+    .argument("<category>", "movies | tv-shows | video-games")
+    .argument("<title...>", "item title")
+    .option("--user <name>", "user name")
+    .action(async (categoryValue: string, titleParts: string[], options: UserOption) => {
+      const title = titleParts.join(" ").trim();
+      if (title.length === 0) {
+        throw new Error("A title is required");
+      }
+      const category = parseCategory(categoryValue);
+      const user = resolveUser(repository, options.user, dependencies);
+      const service = new CatalogService(repository, dependencies.generateId);
+      const session = service.addItem({
+        userId: user.id,
+        category,
+        title,
+      });
+      const result = await completeRanking(session, dependencies);
+      dependencies.write(
+        `Ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
+      );
+    });
+
+  program
+    .command("list")
+    .description("List ranked items in a category")
+    .argument("<category>", "movies | tv-shows | video-games")
+    .option("--user <name>", "user name")
+    .action((categoryValue: string, options: UserOption) => {
+      const category = parseCategory(categoryValue);
+      const user = resolveUser(repository, options.user, dependencies);
+      const service = new CatalogService(repository, dependencies.generateId);
+      const items = service.list(user.id, category);
+      if (items.length === 0) {
+        dependencies.write(`No ranked items in ${category} for ${user.name}.`);
+        return;
+      }
+      for (const item of items) {
+        dependencies.write(
+          `#${item.position}  ${item.score.toFixed(1)}  ${item.id}  ${item.title}`,
+        );
+      }
+    });
+
+  program
+    .command("delete")
+    .description("Delete an item by ID")
+    .argument("<category>", "movies | tv-shows | video-games")
+    .argument("<item-id>", "item ID")
+    .option("--user <name>", "user name")
+    .action((categoryValue: string, itemId: string, options: UserOption) => {
+      const category = parseCategory(categoryValue);
+      const user = resolveUser(repository, options.user, dependencies);
+      const service = new CatalogService(repository, dependencies.generateId);
+      service.delete(user.id, category, itemId);
+      dependencies.write(`Deleted ${itemId} from ${category} for ${user.name}.`);
+    });
+
+  program
+    .command("rerank")
+    .description("Re-rank an item by ID")
+    .argument("<category>", "movies | tv-shows | video-games")
+    .argument("<item-id>", "item ID")
+    .option("--user <name>", "user name")
+    .action(async (categoryValue: string, itemId: string, options: UserOption) => {
+      const category = parseCategory(categoryValue);
+      const user = resolveUser(repository, options.user, dependencies);
+      const service = new CatalogService(repository, dependencies.generateId);
+      const result = await completeRanking(
+        service.rerank(user.id, category, itemId),
+        dependencies,
+      );
+      dependencies.write(
+        `Re-ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
+      );
+    });
+
   try {
-    if (command === "users") {
-      await runUsersCommand(positionals, repository, dependencies);
-      return;
-    }
-
-    if (
-      command !== "add" &&
-      command !== "list" &&
-      command !== "delete" &&
-      command !== "rerank"
-    ) {
-      throw new Error(`Unknown command "${command}"\n\n${usage}`);
-    }
-
-    const categoryValue = positionals[1];
-    if (categoryValue === undefined) {
-      throw new Error(`A category is required\n\n${usage}`);
-    }
-    const category = parseCategory(categoryValue);
-    const user = resolveUser(repository, values.user, dependencies);
-    const service = new CatalogService(repository, dependencies.generateId);
-
-    switch (command) {
-      case "add": {
-        const title = positionals.slice(2).join(" ");
-        if (title.length === 0) {
-          throw new Error("A title is required");
-        }
-        const session = service.addItem({
-          userId: user.id,
-          category,
-          title,
-        });
-        const result = await completeRanking(session, dependencies);
-        dependencies.write(
-          `Ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
-        );
+    await program.parseAsync([...argv], { from: "user" });
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      if (
+        error.code === "commander.helpDisplayed" ||
+        error.code === "commander.help" ||
+        error.code === "commander.version"
+      ) {
         return;
       }
-      case "list": {
-        const items = service.list(user.id, category);
-        if (items.length === 0) {
-          dependencies.write(`No ranked items in ${category} for ${user.name}.`);
-          return;
-        }
-        for (const item of items) {
-          dependencies.write(
-            `#${item.position}  ${item.score.toFixed(1)}  ${item.id}  ${item.title}`,
-          );
-        }
-        return;
-      }
-      case "delete": {
-        const itemId = requireItemId(positionals);
-        service.delete(user.id, category, itemId);
-        dependencies.write(`Deleted ${itemId} from ${category} for ${user.name}.`);
-        return;
-      }
-      case "rerank": {
-        const itemId = requireItemId(positionals);
-        const result = await completeRanking(
-          service.rerank(user.id, category, itemId),
-          dependencies,
-        );
-        dependencies.write(
-          `Re-ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
-        );
-      }
+      throw new Error(error.message);
     }
+    throw error;
   } finally {
     repository.close();
   }
-}
-
-async function runUsersCommand(
-  positionals: readonly string[],
-  repository: UserRepository,
-  dependencies: Pick<CliDependencies, "write">,
-): Promise<void> {
-  const subcommand = positionals[1];
-  if (subcommand === "list") {
-    const users = repository.listUsers();
-    if (users.length === 0) {
-      dependencies.write("No users yet. Create one with: users create <name>");
-      return;
-    }
-    for (const user of users) {
-      dependencies.write(`${user.name}  (${user.id})`);
-    }
-    return;
-  }
-
-  if (subcommand === "create") {
-    const name = positionals.slice(2).join(" ");
-    if (name.length === 0) {
-      throw new Error("A user name is required");
-    }
-    const user = repository.createUser(name);
-    dependencies.write(`Created user "${user.name}" (${user.id})`);
-    return;
-  }
-
-  throw new Error(
-    `Unknown users subcommand "${subcommand ?? ""}"\n\n${usage}`,
-  );
 }
 
 function resolveUser(
@@ -195,14 +202,6 @@ function resolveUser(
 function createSqliteRepository(databasePath: string): RankItRepository {
   mkdirSync(dirname(databasePath), { recursive: true });
   return new SqliteCatalogRepository(databasePath);
-}
-
-function requireItemId(positionals: readonly string[]): string {
-  const itemId = positionals[2];
-  if (itemId === undefined || positionals.length !== 3) {
-    throw new Error("Exactly one item ID is required");
-  }
-  return itemId;
 }
 
 async function completeRanking(
