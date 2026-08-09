@@ -101,15 +101,23 @@ export class CatalogService {
       }
       return trimmed;
     });
-    const items = titles.map((title) => ({
-      id: this.#generateId(),
-      category: input.category,
-      title,
-    }));
     const rankedItems =
       input.mode === "replace"
         ? []
         : this.#repository.getRankedItems(input.userId, input.category);
+    const knownTitles = new Set(rankedItems.map(({ title }) => title));
+    const uniqueTitles = titles.filter((title) => {
+      if (knownTitles.has(title)) {
+        return false;
+      }
+      knownTitles.add(title);
+      return true;
+    });
+    const items = uniqueTitles.map((title) => ({
+      id: this.#generateId(),
+      category: input.category,
+      title,
+    }));
 
     return new BulkRankingSession(
       this.#repository,

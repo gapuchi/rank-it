@@ -100,6 +100,25 @@ describe("runCli", () => {
     ]);
   });
 
+  it("ignores duplicate titles during CSV imports", async () => {
+    const harness = createHarness();
+    await harness.execute(["add", "movies", "Arrival"]);
+    const csv = harness.writeCsv(
+      "duplicates.csv",
+      "title\nArrival\nMoonlight\nMoonlight\n",
+    );
+
+    await expect(
+      harness.execute(["import", "movies", csv], ["no"]),
+    ).resolves.toEqual([
+      "Imported and ranked 1 item in movies for default.",
+    ]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "#1  10.0  item-1  Arrival",
+      "#2  0.0  item-2  Moonlight",
+    ]);
+  });
+
   it("can replace an existing ranking with an imported CSV", async () => {
     const harness = createHarness();
     await harness.execute(["add", "movies", "Existing"]);

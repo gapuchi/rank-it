@@ -172,6 +172,57 @@ describe("CatalogService", () => {
     ).toEqual(["best", "new-1", "worst"]);
   });
 
+  it("ignores exact duplicate titles within and before an append import", () => {
+    const { repository, service, userId } = createFixture();
+    repository.seed(userId, "movies", [
+      { id: "existing", category: "movies", title: "Arrival" },
+    ]);
+
+    const session = service.importUnordered({
+      userId,
+      category: "movies",
+      titles: [" Arrival ", "Moonlight", "Moonlight", "moonlight"],
+    });
+
+    expect(session.next()).toMatchObject({
+      type: "compare",
+      item: { id: "new-1", title: "Moonlight" },
+      total: 2,
+    });
+    session.answer({ better: false });
+    session.answer({ better: false });
+    expect(session.next()).toEqual({
+      type: "done",
+      imported: 2,
+      total: 2,
+    });
+    expect(
+      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+    ).toEqual(["Arrival", "Moonlight", "moonlight"]);
+  });
+
+  it("completes without comparisons when every appended title is a duplicate", () => {
+    const { repository, service, userId } = createFixture();
+    repository.seed(userId, "movies", [
+      { id: "existing", category: "movies", title: "Arrival" },
+    ]);
+
+    const session = service.importUnordered({
+      userId,
+      category: "movies",
+      titles: ["Arrival", " Arrival "],
+    });
+
+    expect(session.next()).toEqual({
+      type: "done",
+      imported: 0,
+      total: 0,
+    });
+    expect(repository.getRankedItems(userId, "movies")).toEqual([
+      { id: "existing", category: "movies", title: "Arrival" },
+    ]);
+  });
+
   it("replaces an existing ranking when requested", () => {
     const { repository, service, userId } = createFixture();
     repository.seed(userId, "movies", [item("existing")]);
@@ -190,6 +241,29 @@ describe("CatalogService", () => {
     });
     expect(repository.getRankedItems(userId, "movies")).toEqual([
       { id: "new-1", category: "movies", title: "Replacement" },
+    ]);
+  });
+
+  it("deduplicates replacement imports without considering old titles", () => {
+    const { repository, service, userId } = createFixture();
+    repository.seed(userId, "movies", [
+      { id: "existing", category: "movies", title: "Arrival" },
+    ]);
+
+    const session = service.importUnordered({
+      userId,
+      category: "movies",
+      titles: ["Arrival", "Arrival"],
+      mode: "replace",
+    });
+
+    expect(session.next()).toEqual({
+      type: "done",
+      imported: 1,
+      total: 1,
+    });
+    expect(repository.getRankedItems(userId, "movies")).toEqual([
+      { id: "new-1", category: "movies", title: "Arrival" },
     ]);
   });
 

@@ -37,9 +37,6 @@ export class BulkRankingSession {
     items: readonly Item[],
     rankedItems: readonly Item[],
   ) {
-    if (items.length === 0) {
-      throw new Error("At least one item is required for bulk ranking");
-    }
     if (
       [...items, ...rankedItems].some((item) => item.category !== category)
     ) {
