@@ -57,28 +57,33 @@ Data defaults to `~/.local/share/rank-it/rank-it.db`. Override paths and the def
 RANK_IT_DB=/path/to/rank-it.db RANK_IT_USER=Alice npm run rank-it -- list movies
 ```
 
-## HTTP API
+## Web app
 
-The CLI and the HTTP API are both thin adapters over the same core
-`CatalogService`, so they share ranking logic and storage. Start the server:
+The CLI and the web app are both thin adapters over the same core
+`CatalogService`, so they share ranking logic and storage. Start the web server:
 
 ```sh
 npm run serve
 ```
 
-Use `npm run dev` for auto-reload during development. The server reads the same
-`RANK_IT_DB` database as the CLI and can be configured with environment
-variables:
+Then open `http://127.0.0.1:4000`. Use `npm run dev` for auto-reload during
+development. The server reads the same `RANK_IT_DB` database as the CLI and can
+be configured with environment variables:
 
 - `PORT` — port to listen on (default `4000`)
 - `HOST` — interface to bind (default `127.0.0.1`)
 - `RANK_IT_DB` — SQLite database path
 - `RANK_IT_USER` — name of the user created on first start (default `default`)
 
-Placing an item takes several comparisons, so adding or re-ranking returns a
-`sessionId` plus the first `prompt`; answer prompts until one has
-`type: "done"`. An item added to an empty category needs no comparisons and
-comes back done with a `null` session.
+Rankings are per user, so the page has a user picker that switches between the
+same users the CLI manages.
+
+### HTTP API
+
+The server exposes a small JSON API under `/api`. Placing an item takes several
+comparisons, so adding or re-ranking returns a `sessionId` plus the first
+`prompt`; answer prompts until one has `type: "done"`. An item added to an empty
+category needs no comparisons and comes back done with a `null` session.
 
 | Method & path | Purpose |
 | --- | --- |
