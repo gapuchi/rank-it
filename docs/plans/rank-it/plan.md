@@ -7,7 +7,7 @@
 - [x] Commit 1: Pure ranking engine
 - [x] Commit 2: Catalog operations
 - [x] Commit 3: SQLite persistence
-- [ ] Commit 4: Basic CLI
+- [x] Commit 4: Basic CLI
 
 ## Goal
 
