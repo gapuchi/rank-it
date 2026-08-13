@@ -5,20 +5,47 @@ import {
   type RankingAnswer,
   type RankingPrompt,
 } from "./ranking-session.js";
+import type {
+  MetadataMatch,
+  MetadataProvider,
+  MetadataSearchOptions,
+} from "./metadata.js";
 import { scoreForPosition } from "./score.js";
 import type { Category, Item, RankedItem } from "./types.js";
 
-export interface AddItemInput {
+export interface ItemInput {
+  readonly title: string;
+  readonly source?: string;
+  readonly sourceId?: string;
+}
+
+export interface AddItemInput extends ItemInput {
   readonly userId: string;
   readonly category: Category;
-  readonly title: string;
+}
+
+export interface AddMatchedItemInput {
+  readonly userId: string;
+  readonly category: Category;
+  readonly sourceId: string;
+  readonly source?: string;
 }
 
 export interface ImportUnorderedInput {
   readonly userId: string;
   readonly category: Category;
-  readonly titles: readonly string[];
+  readonly titles?: readonly string[];
+  readonly items?: readonly ItemInput[];
   readonly mode?: "append" | "replace";
+}
+
+export interface CatalogServiceOptions {
+  readonly metadataProvider?: MetadataProvider;
+}
+
+export interface ResolvedTitles {
+  readonly items: readonly ItemInput[];
+  readonly unmatched: readonly string[];
 }
 
 export class CatalogRankingSession {
@@ -88,10 +115,92 @@ export class CatalogRankingSession {
 export class CatalogService {
   readonly #repository: CatalogRepository;
   readonly #generateId: () => string;
+  readonly #metadataProvider: MetadataProvider | undefined;
 
-  constructor(repository: CatalogRepository, generateId: () => string) {
+  constructor(
+    repository: CatalogRepository,
+    generateId: () => string,
+    options: CatalogServiceOptions = {},
+  ) {
     this.#repository = repository;
     this.#generateId = generateId;
+    this.#metadataProvider = options.metadataProvider;
+  }
+
+  /** True when titles in this category can be confirmed against a database. */
+  supportsMetadata(category: Category): boolean {
+    return this.#metadataProvider?.supports(category) ?? false;
+  }
+
+  /** Searches the configured title database without touching the catalog. */
+  async searchMetadata(
+    category: Category,
+    query: string,
+    options?: MetadataSearchOptions,
+  ): Promise<readonly MetadataMatch[]> {
+    const provider = this.#requireProvider(category);
+    const trimmed = query.trim();
+    if (trimmed.length === 0) {
+      throw new Error("A search query is required");
+    }
+
+    return provider.search(category, trimmed, options ?? {});
+  }
+
+  /**
+   * Adds an item from a confirmed database entry. The entry is looked up again
+   * here so a caller cannot introduce a title the provider does not know.
+   */
+  async addMatchedItem(
+    input: AddMatchedItemInput,
+  ): Promise<CatalogRankingSession> {
+    const match = await this.#lookupMatch(
+      input.category,
+      input.sourceId,
+      input.source,
+    );
+
+    return this.addItem({
+      userId: input.userId,
+      category: input.category,
+      title: match.title,
+      source: match.source,
+      sourceId: match.sourceId,
+    });
+  }
+
+  /**
+   * Resolves free-text titles (such as a CSV import) to their best database
+   * match, reporting titles the provider does not recognize.
+   */
+  async resolveTitles(
+    category: Category,
+    titles: readonly string[],
+  ): Promise<ResolvedTitles> {
+    const provider = this.#requireProvider(category);
+    const items: ItemInput[] = [];
+    const unmatched: string[] = [];
+
+    for (const title of titles) {
+      const trimmed = title.trim();
+      if (trimmed.length === 0) {
+        throw new Error("Imported titles cannot be empty");
+      }
+
+      const [match] = await provider.search(category, trimmed, { limit: 1 });
+      if (match === undefined) {
+        unmatched.push(trimmed);
+        continue;
+      }
+
+      items.push({
+        title: match.title,
+        source: match.source,
+        sourceId: match.sourceId,
+      });
+    }
+
+    return { items, unmatched };
   }
 
   async addItem(input: AddItemInput): Promise<CatalogRankingSession> {
@@ -111,16 +220,17 @@ export class CatalogService {
   async importUnordered(
     input: ImportUnorderedInput,
   ): Promise<BulkRankingSession> {
-    if (input.titles.length === 0) {
+    const rows = normalizeImportRows(input);
+    if (rows.length === 0) {
       throw new Error("At least one title is required for import");
     }
 
-    const titles = input.titles.map((title) => {
-      const trimmed = title.trim();
-      if (trimmed.length === 0) {
+    const normalizedRows = rows.map((row) => {
+      const title = row.title.trim();
+      if (title.length === 0) {
         throw new Error("Imported titles cannot be empty");
       }
-      return trimmed;
+      return { ...row, title };
     });
     const rankedItems =
       input.mode === "replace"
@@ -130,18 +240,19 @@ export class CatalogService {
             input.category,
           );
     const knownTitles = new Set(rankedItems.map(({ title }) => title));
-    const uniqueTitles = titles.filter((title) => {
-      if (knownTitles.has(title)) {
-        return false;
+    const items = normalizedRows.flatMap((row) => {
+      if (knownTitles.has(row.title)) {
+        return [];
       }
-      knownTitles.add(title);
-      return true;
+      knownTitles.add(row.title);
+      return [
+        this.#buildItem({
+          ...row,
+          userId: input.userId,
+          category: input.category,
+        }),
+      ];
     });
-    const items = uniqueTitles.map((title) => ({
-      id: this.#generateId(),
-      category: input.category,
-      title,
-    }));
 
     return BulkRankingSession.create(
       this.#repository,
@@ -203,11 +314,59 @@ export class CatalogService {
     if (title.length === 0) {
       throw new Error("Title is required");
     }
+    if ((input.source === undefined) !== (input.sourceId === undefined)) {
+      throw new Error(
+        "A confirmed title needs both a metadata source and source ID",
+      );
+    }
 
     return {
       id: this.#generateId(),
       category: input.category,
       title,
+      ...(input.source === undefined || input.sourceId === undefined
+        ? {}
+        : { source: input.source, sourceId: input.sourceId }),
     };
   }
+
+  #requireProvider(category: Category): MetadataProvider {
+    const provider = this.#metadataProvider;
+    if (provider === undefined) {
+      throw new Error("Title search is not configured");
+    }
+    if (!provider.supports(category)) {
+      throw new Error(`Title search is not available for ${category}`);
+    }
+    return provider;
+  }
+
+  async #lookupMatch(
+    category: Category,
+    sourceId: string,
+    source: string | undefined,
+  ): Promise<MetadataMatch> {
+    const provider = this.#requireProvider(category);
+    if (source !== undefined && source !== provider.name) {
+      throw new Error(`Unknown metadata source "${source}"`);
+    }
+
+    const match = await provider.lookup(category, sourceId);
+    if (match === undefined) {
+      throw new Error(
+        `Title "${sourceId}" was not found in the ${provider.name} database`,
+      );
+    }
+    return match;
+  }
+}
+
+function normalizeImportRows(input: ImportUnorderedInput): readonly ItemInput[] {
+  if (input.items !== undefined) {
+    return input.items;
+  }
+  if (input.titles !== undefined) {
+    return input.titles.map((title) => ({ title }));
+  }
+  return [];
 }

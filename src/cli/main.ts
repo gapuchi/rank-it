@@ -9,14 +9,19 @@ import { Command, CommanderError } from "commander";
 import {
   type BulkRankingPrompt,
   type BulkRankingSession,
+  type CatalogRankingSession,
   CatalogService,
   completeBulkRanking,
   completeRanking,
   type CatalogRepository,
+  type Category,
+  type MetadataMatch,
+  type MetadataProvider,
   type RankingPrompt,
   type UserRepository,
 } from "../core/index.js";
 import { parseCategory } from "../core/types.js";
+import { createTmdbMetadataProviderFromEnvironment } from "../metadata/index.js";
 import { SqliteCatalogRepository } from "../storage/index.js";
 import { parseTitleCsv } from "./csv.js";
 
@@ -29,10 +34,13 @@ interface CliDependencies {
   readonly defaultUserName?: string;
   readonly generateId: () => string;
   readonly createRepository?: (databasePath: string) => RankItRepository;
+  readonly metadataProvider?: MetadataProvider;
 }
 
 type UserOption = { user?: string };
-type ImportOptions = UserOption & { replace?: boolean };
+type AddOptions = UserOption & { unverified?: boolean };
+type ImportOptions = UserOption & { replace?: boolean; verify?: boolean };
+type SearchOptions = { limit?: string };
 
 export async function runCli(
   argv: readonly string[],
@@ -41,6 +49,12 @@ export async function runCli(
   const createRepository =
     dependencies.createRepository ?? createSqliteRepository;
   const repository = createRepository(dependencies.databasePath);
+
+  const metadataProvider = dependencies.metadataProvider;
+  const createService = (): CatalogService =>
+    new CatalogService(repository, dependencies.generateId, {
+      ...(metadataProvider === undefined ? {} : { metadataProvider }),
+    });
 
   const program = new Command();
   program
@@ -90,9 +104,10 @@ export async function runCli(
     .command("add")
     .description("Add and rank an item")
     .argument("<category>", "movies | tv-shows | video-games")
-    .argument("<title...>", "item title")
+    .argument("<title...>", "item title or search terms")
     .option("--user <name>", "user name")
-    .action(async (categoryValue: string, titleParts: string[], options: UserOption) => {
+    .option("--unverified", "skip the title database and use the text as typed")
+    .action(async (categoryValue: string, titleParts: string[], options: AddOptions) => {
       const title = titleParts.join(" ").trim();
       if (title.length === 0) {
         throw new Error("A title is required");
@@ -103,12 +118,23 @@ export async function runCli(
         options.user,
         dependencies,
       );
-      const service = new CatalogService(repository, dependencies.generateId);
-      const session = await service.addItem({
-        userId: user.id,
-        category,
-        title,
-      });
+      const service = createService();
+      const verify =
+        options.unverified !== true && service.supportsMetadata(category);
+
+      const session = verify
+        ? await addFromSearch(
+            service,
+            { userId: user.id, category, query: title },
+            dependencies,
+          )
+        : await service.addItem({ userId: user.id, category, title });
+
+      if (session === undefined) {
+        dependencies.write("Cancelled. Nothing was added.");
+        return;
+      }
+
       const result = await completeRanking(session, (prompt) =>
         askComparison(prompt, dependencies),
       );
@@ -118,12 +144,37 @@ export async function runCli(
     });
 
   program
+    .command("search")
+    .description("Search the title database without adding anything")
+    .argument("<category>", "movies | tv-shows")
+    .argument("<query...>", "search terms")
+    .option("--limit <count>", "maximum results to show")
+    .action(async (categoryValue: string, queryParts: string[], options: SearchOptions) => {
+      const category = parseCategory(categoryValue);
+      const service = createService();
+      const matches = await service.searchMetadata(
+        category,
+        queryParts.join(" "),
+        options.limit === undefined ? {} : { limit: Number(options.limit) },
+      );
+
+      if (matches.length === 0) {
+        dependencies.write("No matching titles found.");
+        return;
+      }
+      for (const match of matches) {
+        dependencies.write(describeMatch(match));
+      }
+    });
+
+  program
     .command("import")
     .description("Import and rank unordered titles from a CSV file")
     .argument("<category>", "movies | tv-shows | video-games")
     .argument("<file>", 'CSV file with a "title" column')
     .option("--user <name>", "user name")
     .option("--replace", "replace the existing category instead of appending")
+    .option("--verify", "confirm every title against the title database")
     .action(
       async (
         categoryValue: string,
@@ -141,11 +192,28 @@ export async function runCli(
           options.user,
           dependencies,
         );
-        const service = new CatalogService(repository, dependencies.generateId);
+        const service = createService();
+
+        let rows;
+        if (options.verify === true) {
+          const resolved = await service.resolveTitles(category, titles);
+          for (const title of resolved.unmatched) {
+            dependencies.write(
+              `Skipped "${title}": no match in the title database.`,
+            );
+          }
+          if (resolved.items.length === 0) {
+            throw new Error("No imported titles could be confirmed");
+          }
+          rows = { items: resolved.items };
+        } else {
+          rows = { titles };
+        }
+
         const session = await service.importUnordered({
           userId: user.id,
           category,
-          titles,
+          ...rows,
           mode: options.replace === true ? "replace" : "append",
         });
         const result = await completeBulkRanking(session, (prompt) =>
@@ -169,15 +237,16 @@ export async function runCli(
         options.user,
         dependencies,
       );
-      const service = new CatalogService(repository, dependencies.generateId);
+      const service = createService();
       const items = await service.list(user.id, category);
       if (items.length === 0) {
         dependencies.write(`No ranked items in ${category} for ${user.name}.`);
         return;
       }
       for (const item of items) {
+        const verified = item.source === undefined ? "" : ` [${item.source}]`;
         dependencies.write(
-          `#${item.position}  ${item.score.toFixed(1)}  ${item.id}  ${item.title}`,
+          `#${item.position}  ${item.score.toFixed(1)}  ${item.id}  ${item.title}${verified}`,
         );
       }
     });
@@ -195,7 +264,7 @@ export async function runCli(
         options.user,
         dependencies,
       );
-      const service = new CatalogService(repository, dependencies.generateId);
+      const service = createService();
       await service.delete(user.id, category, itemId);
       dependencies.write(`Deleted ${itemId} from ${category} for ${user.name}.`);
     });
@@ -213,7 +282,7 @@ export async function runCli(
         options.user,
         dependencies,
       );
-      const service = new CatalogService(repository, dependencies.generateId);
+      const service = createService();
       const session = await service.rerank(
         user.id,
         category,
@@ -270,6 +339,80 @@ function createSqliteRepository(databasePath: string): RankItRepository {
   mkdirSync(dirname(databasePath), { recursive: true });
   return new SqliteCatalogRepository(databasePath);
 }
+
+/**
+ * Confirms a typed title against the metadata provider before it can enter the
+ * catalog. Returns undefined when the user rejects every candidate.
+ */
+async function addFromSearch(
+  service: CatalogService,
+  input: { userId: string; category: Category; query: string },
+  dependencies: Pick<CliDependencies, "ask" | "write">,
+): Promise<CatalogRankingSession | undefined> {
+  const matches = await service.searchMetadata(input.category, input.query, {
+    limit: 5,
+  });
+
+  if (matches.length === 0) {
+    throw new Error(
+      `No ${input.category} match "${input.query}". Add it with --unverified to skip the title database.`,
+    );
+  }
+
+  const chosen = await chooseMatch(matches, dependencies);
+  if (chosen === undefined) {
+    return undefined;
+  }
+
+  return service.addMatchedItem({
+    userId: input.userId,
+    category: input.category,
+    source: chosen.source,
+    sourceId: chosen.sourceId,
+  });
+}
+
+async function chooseMatch(
+  matches: readonly MetadataMatch[],
+  dependencies: Pick<CliDependencies, "ask" | "write">,
+): Promise<MetadataMatch | undefined> {
+  if (matches.length === 1) {
+    const only = matches[0]!;
+    const confirmed = await askYesOrNo(
+      `Is this the one? ${describeMatch(only)} [y/n]: `,
+      dependencies,
+    );
+    return confirmed ? only : undefined;
+  }
+
+  matches.forEach((match, index) => {
+    dependencies.write(`${index + 1}) ${describeMatch(match)}`);
+  });
+
+  while (true) {
+    const answer = (
+      await dependencies.ask(`Which one? [1-${matches.length}, n to cancel]: `)
+    )
+      .trim()
+      .toLowerCase();
+    if (answer === "n" || answer === "no") {
+      return undefined;
+    }
+    const choice = Number(answer);
+    if (Number.isInteger(choice) && choice >= 1 && choice <= matches.length) {
+      return matches[choice - 1];
+    }
+    dependencies.write(
+      `Please enter a number from 1 to ${matches.length}, or n.`,
+    );
+  }
+}
+
+function describeMatch(match: MetadataMatch): string {
+  const year = match.year === undefined ? "" : ` (${match.year})`;
+  return `${match.title}${year}  [${match.source}:${match.sourceId}]`;
+}
+
 async function askBulkComparison(
   prompt: Extract<BulkRankingPrompt, { type: "compare" }>,
   dependencies: Pick<CliDependencies, "ask" | "write">,
@@ -370,6 +513,9 @@ async function main(): Promise<void> {
       };
 
   const defaultUserName = process.env.RANK_IT_USER;
+  const metadataProvider = createTmdbMetadataProviderFromEnvironment(
+    process.env,
+  );
   try {
     await runCli(process.argv.slice(2), {
       ask,
@@ -378,6 +524,7 @@ async function main(): Promise<void> {
       ...(defaultUserName === undefined
         ? {}
         : { defaultUserName }),
+      ...(metadataProvider === undefined ? {} : { metadataProvider }),
       generateId: randomUUID,
     });
   } finally {

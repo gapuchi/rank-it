@@ -15,7 +15,15 @@ export function RankingItem({
     <div className="item">
       <div className="rank">#{item.position}</div>
       <div className="item-main">
-        <div className="item-title">{item.title}</div>
+        <div className="item-title">
+          {item.title}
+          {item.source !== undefined && (
+            <span className="verified" title={`Confirmed in ${item.source}`}>
+              {" "}
+              ✓
+            </span>
+          )}
+        </div>
       </div>
       <div className="score">{item.score.toFixed(1)}</div>
       <div className="item-actions">

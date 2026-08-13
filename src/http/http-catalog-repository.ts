@@ -18,11 +18,16 @@ export class HttpCatalogRepository implements CatalogRepository {
       {},
       this.#options,
     );
-    return response.items.map(({ id, category: itemCategory, title }) => ({
-      id,
-      category: itemCategory,
-      title,
-    }));
+    return response.items.map(
+      ({ id, category: itemCategory, title, source, sourceId }) => ({
+        id,
+        category: itemCategory,
+        title,
+        ...(source === undefined || sourceId === undefined
+          ? {}
+          : { source, sourceId }),
+      }),
+    );
   }
 
   async saveRanking(

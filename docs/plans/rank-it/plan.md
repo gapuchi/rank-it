@@ -40,6 +40,8 @@ Build a small TypeScript package with a pure ranking engine and SQLite-backed ca
 - `core` owns categories, items, ranking sessions, catalog use cases, and score derivation. It performs no I/O.
 - `storage` implements the core repository port with SQLite and translates database rows at the boundary.
 - `cli` parses commands, presents prompts, and prints results. The composition root connects it to core and storage.
+- `metadata` implements the core `MetadataProvider` port against external title databases (TMDB today) and owns all HTTP concerns for them.
+- `http` carries core ports over the network for clients that cannot hold credentials or a database handle: a catalog/user repository and a metadata provider that both target the rank-it server.
 
 ## Contracts
 
@@ -81,6 +83,21 @@ CLI → CatalogService.rerank
 CatalogService → CatalogRepository
   input/output: items and best-first ordered positions within one category
   invariant: categories never share an ordering space
+
+CLI/web → CatalogService.searchMetadata
+  input:  { category, query, limit? }
+  output: MetadataMatch[]
+  invariant: searching never changes the catalog
+
+CLI/web → CatalogService.addMatchedItem
+  input:  { category, sourceId, source? }
+  output: RankingSession
+  invariant: the entry is re-read through the provider, so only titles the
+             database knows can be added; the stored title comes from the match
+
+CatalogService → MetadataProvider
+  input/output: search terms and confirmed entries for one category
+  invariant: a provider that does not support a category is never queried
 ```
 
 ## Investigation
@@ -175,10 +192,12 @@ Each increment is one local commit on `main`, in order. No remote operations or 
 
 - **defer:** Soft ties or “can't decide” handling.
 - **defer:** Import, export, and cloud synchronization.
-- **defer:** Rich metadata such as posters, platforms, and third-party IDs.
+- **resolved (2026-08-13):** Validating movies and TV shows against a real title database (TMDB) via a `MetadataProvider` port. Items store the matched source and ID for provenance; other fields (year, poster, overview) are shown in search results only and are not persisted.
+- **defer:** A provider for video games, and persisting descriptive fields such as year, runtime, genres, or cast.
 
 ## Plan drift
 
 2026-08-09: Added a Nix flake development shell to Commit 1 after confirming Nix is the project's development-environment convention.
 2026-08-09: Removed year and notes from the item model to keep the initial catalog focused on ranking.
 2026-08-09: Adopted the Hono router (served on Node via `@hono/node-server`) for the HTTP API in place of hand-rolled `node:http` request routing, keeping the same `createApiServer` → `http.Server` contract and API surface.
+2026-08-13: Added a `MetadataProvider` port with a TMDB adapter so movies and TV shows can be searched and validated before ranking; items store the matched source and ID (SQLite schema v4 adds `source`/`source_id`). Because clients now run `CatalogService` themselves, the browser gets the provider through `HttpMetadataProvider` while the server keeps the API key. Unverified entry stays available for video games and for titles the database lacks; descriptive fields such as year are not persisted.

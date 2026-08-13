@@ -11,6 +11,10 @@ export interface Item {
   readonly id: string;
   readonly category: Category;
   readonly title: string;
+  /** Name of the external database that confirmed this title, if any. */
+  readonly source?: string;
+  /** Identifier of the confirmed entry within `source`. */
+  readonly sourceId?: string;
 }
 
 export interface RankedItem extends Item {

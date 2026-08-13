@@ -10,6 +10,7 @@ import {
   InMemoryUserRepository,
 } from "../../src/storage/in-memory-catalog-repository.js";
 import { createApiServer } from "../../src/api/server.js";
+import { createFakeMetadataProvider } from "../support/fake-metadata-provider.js";
 
 interface Harness {
   readonly userId: string;
@@ -21,7 +22,12 @@ interface Harness {
 const harnesses: Harness[] = [];
 const temporaryDirectories: string[] = [];
 
-async function startServer(webRoot?: string): Promise<Harness> {
+interface StartOptions {
+  readonly webRoot?: string;
+  readonly searchable?: boolean;
+}
+
+async function startServer(options: StartOptions = {}): Promise<Harness> {
   const catalogRepository = new InMemoryCatalogRepository();
   const userRepository = new InMemoryUserRepository();
   const user = await userRepository.createUser("default");
@@ -29,7 +35,10 @@ async function startServer(webRoot?: string): Promise<Harness> {
   const server = createApiServer({
     catalogRepository,
     userRepository,
-    ...(webRoot === undefined ? {} : { webRoot }),
+    ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
+    ...(options.searchable === true
+      ? { metadataProvider: createFakeMetadataProvider() }
+      : {}),
   });
 
   await new Promise<void>((resolve) => {
@@ -91,11 +100,108 @@ describe("API server", () => {
     });
   });
 
+  it("reports no title-search capabilities without a provider", async () => {
+    const api = await startServer();
+
+    expect(await api.json("/api/metadata/capabilities")).toEqual({
+      name: null,
+      searchableCategories: [],
+    });
+
+    const search = await api.request(
+      "/api/metadata/search?category=movies&query=arrival",
+    );
+    expect(search.status).toBe(400);
+    expect((await search.json()).error).toContain("not configured");
+
+    const lookup = await api.request("/api/metadata/movies/titles/1");
+    expect(lookup.status).toBe(400);
+  });
+
+  it("exposes the title database to clients that cannot hold credentials", async () => {
+    const api = await startServer({ searchable: true });
+
+    expect(await api.json("/api/metadata/capabilities")).toEqual({
+      name: "fake-db",
+      searchableCategories: ["movies", "tv-shows"],
+    });
+
+    const found = await api.json(
+      "/api/metadata/search?category=movies&query=arrival&limit=1",
+    );
+    expect(found.matches).toEqual([
+      {
+        source: "fake-db",
+        sourceId: "1",
+        title: "Arrival",
+        year: 2016,
+        posterUrl: "https://images.test/arrival.jpg",
+      },
+    ]);
+
+    expect((await api.json("/api/metadata/movies/titles/1")).match).toMatchObject(
+      { title: "Arrival", sourceId: "1" },
+    );
+
+    const unknown = await api.request("/api/metadata/movies/titles/999");
+    expect(unknown.status).toBe(404);
+
+    const unsupported = await api.request(
+      "/api/metadata/search?category=video-games&query=halo",
+    );
+    expect(unsupported.status).toBe(400);
+
+    const badLimit = await api.request(
+      "/api/metadata/search?category=movies&query=arrival&limit=0",
+    );
+    expect(badLimit.status).toBe(400);
+  });
+
+  it("keeps title provenance when a client saves a ranking", async () => {
+    const api = await startServer();
+    const ranking = `/api/users/${api.userId}/categories/movies/ranking`;
+
+    const saved = await api.request(
+      ranking,
+      putJson({
+        items: [
+          {
+            id: "arrival",
+            category: "movies",
+            title: "Arrival",
+            source: "tmdb",
+            sourceId: "329865",
+          },
+        ],
+      }),
+    );
+    expect(saved.status).toBe(204);
+
+    const list = await api.json(
+      `/api/users/${api.userId}/categories/movies/items`,
+    );
+    expect(list.items[0]).toMatchObject({
+      title: "Arrival",
+      source: "tmdb",
+      sourceId: "329865",
+    });
+
+    const halfProvenance = await api.request(
+      ranking,
+      putJson({
+        items: [
+          { id: "x", category: "movies", title: "Arrival", sourceId: "1" },
+        ],
+      }),
+    );
+    expect(halfProvenance.status).toBe(400);
+  });
+
   it("serves the built web app without masking unknown API routes", async () => {
     const webRoot = await mkdtemp(join(tmpdir(), "rank-it-web-"));
     temporaryDirectories.push(webRoot);
     await writeFile(join(webRoot, "index.html"), "<h1>rank-it</h1>");
-    const api = await startServer(webRoot);
+    const api = await startServer({ webRoot });
 
     const page = await api.request("/");
     expect(page.status).toBe(200);
