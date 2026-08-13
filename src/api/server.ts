@@ -12,19 +12,14 @@ import {
   parseCategory,
   type Category,
   type CatalogRepository,
-  type RankingAnswer,
+  type Item,
   type UserRepository,
 } from "../core/index.js";
-import {
-  RankingSessionStore,
-  SessionNotFoundError,
-} from "./ranking-session-store.js";
 
 export interface ApiServerOptions {
   readonly catalogRepository: CatalogRepository;
   readonly userRepository: UserRepository;
   readonly generateId?: () => string;
-  readonly sessionStore?: RankingSessionStore;
   /** Absolute path to a directory of static web assets to serve. */
   readonly webRoot?: string;
 }
@@ -50,8 +45,8 @@ const contentTypes: Record<string, string> = {
 
 interface Handlers {
   readonly service: CatalogService;
+  readonly catalog: CatalogRepository;
   readonly users: UserRepository;
-  readonly sessions: RankingSessionStore;
   readonly webRoot: string | undefined;
 }
 
@@ -59,8 +54,8 @@ export function createApiServer(options: ApiServerOptions): Server {
   const generateId = options.generateId ?? randomUUID;
   const handlers: Handlers = {
     service: new CatalogService(options.catalogRepository, generateId),
+    catalog: options.catalogRepository,
     users: options.userRepository,
-    sessions: options.sessionStore ?? new RankingSessionStore(),
     webRoot: options.webRoot === undefined ? undefined : resolve(options.webRoot),
   };
 
@@ -69,7 +64,7 @@ export function createApiServer(options: ApiServerOptions): Server {
 }
 
 function buildApp(handlers: Handlers): Hono {
-  const { service, users, sessions } = handlers;
+  const { service, catalog, users } = handlers;
   const app = new Hono();
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
@@ -90,7 +85,8 @@ function buildApp(handlers: Handlers): Hono {
     return c.json({ user }, 201);
   });
 
-  const itemsPath = "/api/users/:userId/categories/:category/items";
+  const categoryPath = "/api/users/:userId/categories/:category";
+  const itemsPath = `${categoryPath}/items`;
 
   app.get(itemsPath, async (c) => {
     const userId = await requireUser(users, c.req.param("userId"));
@@ -98,14 +94,12 @@ function buildApp(handlers: Handlers): Hono {
     return c.json({ items: await service.list(userId, category) });
   });
 
-  app.post(itemsPath, async (c) => {
+  app.put(`${categoryPath}/ranking`, async (c) => {
     const userId = await requireUser(users, c.req.param("userId"));
     const category = validateCategory(c.req.param("category"));
-    const title = await readTitle(c);
-    const session = await runCatch(() =>
-      service.addItem({ userId, category, title }),
-    );
-    return c.json(sessions.start(session), 201);
+    const items = await readRankingItems(c, category);
+    await runCatch(() => catalog.saveRanking(userId, category, items));
+    return c.body(null, 204);
   });
 
   app.delete(`${itemsPath}/:id`, async (c) => {
@@ -115,32 +109,6 @@ function buildApp(handlers: Handlers): Hono {
       service.delete(userId, category, c.req.param("id")),
     );
     return c.body(null, 204);
-  });
-
-  app.post(`${itemsPath}/:id/rerank`, async (c) => {
-    const userId = await requireUser(users, c.req.param("userId"));
-    const category = validateCategory(c.req.param("category"));
-    const session = await runCatch(() =>
-      service.rerank(userId, category, c.req.param("id")),
-    );
-    return c.json(sessions.start(session), 201);
-  });
-
-  app.post("/api/sessions/:id/answer", async (c) => {
-    const sessionId = c.req.param("id");
-    const answer = await readAnswer(c);
-    try {
-      const prompt = await sessions.answer(sessionId, answer);
-      return c.json({ prompt });
-    } catch (error: unknown) {
-      if (error instanceof SessionNotFoundError) {
-        throw new HttpError(404, error.message);
-      }
-      if (error instanceof Error) {
-        throw new HttpError(400, error.message);
-      }
-      throw error;
-    }
   });
 
   // Unknown API routes must not fall through to the static handler.
@@ -159,22 +127,57 @@ function buildApp(handlers: Handlers): Hono {
   return app;
 }
 
-async function readTitle(c: Context): Promise<string> {
+async function readRankingItems(
+  c: Context,
+  category: Category,
+): Promise<readonly Item[]> {
   const body = await readJson(c);
-  const title = body["title"];
-  if (typeof title !== "string" || title.trim().length === 0) {
-    throw new HttpError(400, "A title is required");
+  const rawItems = body["items"];
+  if (!Array.isArray(rawItems)) {
+    throw new HttpError(400, "Ranking must include an items array");
   }
-  return title;
-}
 
-async function readAnswer(c: Context): Promise<RankingAnswer> {
-  const body = await readJson(c);
-  const better = body["better"];
-  if (typeof better !== "boolean") {
-    throw new HttpError(400, "Answer must include a boolean better flag");
+  const items: Item[] = [];
+  for (const rawItem of rawItems) {
+    if (typeof rawItem !== "object" || rawItem === null || Array.isArray(rawItem)) {
+      throw new HttpError(400, "Each ranked item must be an object");
+    }
+
+    const record = rawItem as Record<string, unknown>;
+    const id = record["id"];
+    const itemCategory = record["category"];
+    const title = record["title"];
+    if (typeof id !== "string" || id.length === 0) {
+      throw new HttpError(400, "Each ranked item must include a non-empty id");
+    }
+    if (typeof title !== "string" || title.trim().length === 0) {
+      throw new HttpError(400, "Each ranked item must include a title");
+    }
+    if (typeof itemCategory !== "string") {
+      throw new HttpError(400, "Each ranked item must include a category");
+    }
+
+    let parsedCategory: Category;
+    try {
+      parsedCategory = parseCategory(itemCategory);
+    } catch {
+      throw new HttpError(400, `Unknown category "${itemCategory}"`);
+    }
+    if (parsedCategory !== category) {
+      throw new HttpError(
+        400,
+        `Item category "${parsedCategory}" does not match "${category}"`,
+      );
+    }
+
+    items.push({
+      id,
+      category: parsedCategory,
+      title: title.trim(),
+    });
   }
-  return { better };
+
+  return items;
 }
 
 async function requireUser(
@@ -287,10 +290,6 @@ function jsonResponse(status: number, body: unknown): Response {
 function respondToError(error: unknown): Response {
   if (error instanceof HttpError) {
     return jsonResponse(error.status, { error: error.message });
-  }
-
-  if (error instanceof SessionNotFoundError) {
-    return jsonResponse(404, { error: error.message });
   }
 
   const message = error instanceof Error ? error.message : String(error);

@@ -25,12 +25,10 @@ async function startServer(webRoot?: string): Promise<Harness> {
   const catalogRepository = new InMemoryCatalogRepository();
   const userRepository = new InMemoryUserRepository();
   const user = await userRepository.createUser("default");
-  let nextId = 0;
 
   const server = createApiServer({
     catalogRepository,
     userRepository,
-    generateId: () => `item-${++nextId}`,
     ...(webRoot === undefined ? {} : { webRoot }),
   });
 
@@ -61,6 +59,14 @@ async function startServer(webRoot?: string): Promise<Harness> {
 function postJson(body: unknown): RequestInit {
   return {
     method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
+function putJson(body: unknown): RequestInit {
+  return {
+    method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   };
@@ -119,24 +125,23 @@ describe("API server", () => {
     expect(duplicate.status).toBe(400);
   });
 
-  it("ranks the first item immediately without a session", async () => {
+  it("loads and saves rankings through the repository endpoints", async () => {
     const api = await startServer();
+    const items = `/api/users/${api.userId}/categories/movies/items`;
+    const ranking = `/api/users/${api.userId}/categories/movies/ranking`;
 
-    const response = await api.request(
-      `/api/users/${api.userId}/categories/movies/items`,
-      postJson({ title: "Arrival" }),
-    );
-    expect(response.status).toBe(201);
-    const started = await response.json();
-    expect(started.sessionId).toBeNull();
-    expect(started.prompt).toMatchObject({
-      type: "done",
-      item: { title: "Arrival", position: 1 },
-    });
+    const empty = await api.json(items);
+    expect(empty.items).toEqual([]);
 
-    const list = await api.json(
-      `/api/users/${api.userId}/categories/movies/items`,
+    const save = await api.request(
+      ranking,
+      putJson({
+        items: [{ id: "item-1", category: "movies", title: "Arrival" }],
+      }),
     );
+    expect(save.status).toBe(204);
+
+    const list = await api.json(items);
     expect(list.items).toEqual([
       {
         id: "item-1",
@@ -148,40 +153,17 @@ describe("API server", () => {
     ]);
   });
 
-  it("drives a comparison session through the answer endpoint", async () => {
-    const api = await startServer();
-    const items = `/api/users/${api.userId}/categories/movies/items`;
-
-    await api.request(items, postJson({ title: "Arrival" }));
-
-    const started = await api.json(items, postJson({ title: "Moonlight" }));
-    expect(started.sessionId).not.toBeNull();
-    expect(started.prompt.type).toBe("compare");
-
-    const done = await api.json(
-      `/api/sessions/${started.sessionId}/answer`,
-      postJson({ better: false }),
-    );
-    expect(done.prompt).toMatchObject({
-      type: "done",
-      item: { title: "Moonlight", position: 2 },
-    });
-
-    const list = await api.json(items);
-    expect(list.items.map((item: { id: string }) => item.id)).toEqual([
-      "item-1",
-      "item-2",
-    ]);
-  });
-
   it("keeps each user's ranking separate", async () => {
     const api = await startServer();
     const other = (await api.json("/api/users", postJson({ name: "sam" })))
       .user;
+    const ranking = `/api/users/${api.userId}/categories/movies/ranking`;
 
     await api.request(
-      `/api/users/${api.userId}/categories/movies/items`,
-      postJson({ title: "Arrival" }),
+      ranking,
+      putJson({
+        items: [{ id: "item-1", category: "movies", title: "Arrival" }],
+      }),
     );
 
     const otherList = await api.json(
@@ -195,28 +177,20 @@ describe("API server", () => {
     expect(ownList.items).toHaveLength(1);
   });
 
-  it("reranks and deletes items", async () => {
+  it("deletes items", async () => {
     const api = await startServer();
     const items = `/api/users/${api.userId}/categories/video-games/items`;
+    const ranking = `/api/users/${api.userId}/categories/video-games/ranking`;
 
-    await api.request(items, postJson({ title: "Outer Wilds" }));
-    const second = await api.json(items, postJson({ title: "Disco Elysium" }));
     await api.request(
-      `/api/sessions/${second.sessionId}/answer`,
-      postJson({ better: false }),
+      ranking,
+      putJson({
+        items: [
+          { id: "item-1", category: "video-games", title: "Outer Wilds" },
+          { id: "item-2", category: "video-games", title: "Disco Elysium" },
+        ],
+      }),
     );
-
-    const rerank = await api.json(`${items}/item-2/rerank`, {
-      method: "POST",
-    });
-    const done = await api.json(
-      `/api/sessions/${rerank.sessionId}/answer`,
-      postJson({ better: true }),
-    );
-    expect(done.prompt).toMatchObject({
-      type: "done",
-      item: { id: "item-2", position: 1 },
-    });
 
     const deleteResponse = await api.request(`${items}/item-1`, {
       method: "DELETE",
@@ -242,17 +216,11 @@ describe("API server", () => {
     );
     expect(unknownUser.status).toBe(404);
 
-    const missingTitle = await api.request(
-      `/api/users/${api.userId}/categories/movies/items`,
-      postJson({}),
+    const missingItems = await api.request(
+      `/api/users/${api.userId}/categories/movies/ranking`,
+      putJson({}),
     );
-    expect(missingTitle.status).toBe(400);
-
-    const missingSession = await api.request(
-      "/api/sessions/does-not-exist/answer",
-      postJson({ better: true }),
-    );
-    expect(missingSession.status).toBe(404);
+    expect(missingItems.status).toBe(400);
 
     const missingItem = await api.request(
       `/api/users/${api.userId}/categories/movies/items/nope`,

@@ -10,7 +10,8 @@ import {
   type BulkRankingPrompt,
   type BulkRankingSession,
   CatalogService,
-  type CatalogRankingSession,
+  completeBulkRanking,
+  completeRanking,
   type CatalogRepository,
   type RankingPrompt,
   type UserRepository,
@@ -108,7 +109,9 @@ export async function runCli(
         category,
         title,
       });
-      const result = await completeRanking(session, dependencies);
+      const result = await completeRanking(session, (prompt) =>
+        askComparison(prompt, dependencies),
+      );
       dependencies.write(
         `Ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
       );
@@ -145,9 +148,8 @@ export async function runCli(
           titles,
           mode: options.replace === true ? "replace" : "append",
         });
-        const result = await completeBulkRanking(
-          session,
-          dependencies,
+        const result = await completeBulkRanking(session, (prompt) =>
+          askBulkComparison(prompt, dependencies),
         );
         dependencies.write(
           `Imported and ranked ${result.imported} ${result.imported === 1 ? "item" : "items"} in ${category} for ${user.name}.`,
@@ -217,9 +219,8 @@ export async function runCli(
         category,
         itemId,
       );
-      const result = await completeRanking(
-        session,
-        dependencies,
+      const result = await completeRanking(session, (prompt) =>
+        askComparison(prompt, dependencies),
       );
       dependencies.write(
         `Re-ranked "${result.item.title}" at #${result.item.position} (${result.item.score.toFixed(1)}) for ${user.name}`,
@@ -269,35 +270,6 @@ function createSqliteRepository(databasePath: string): RankItRepository {
   mkdirSync(dirname(databasePath), { recursive: true });
   return new SqliteCatalogRepository(databasePath);
 }
-
-async function completeRanking(
-  session: CatalogRankingSession,
-  dependencies: Pick<CliDependencies, "ask" | "write">,
-): Promise<Extract<RankingPrompt, { type: "done" }>> {
-  let prompt = session.next();
-
-  while (prompt.type !== "done") {
-    const better = await askComparison(prompt, dependencies);
-    prompt = await session.answer({ better });
-  }
-
-  return prompt;
-}
-
-async function completeBulkRanking(
-  session: BulkRankingSession,
-  dependencies: Pick<CliDependencies, "ask" | "write">,
-): Promise<Extract<BulkRankingPrompt, { type: "done" }>> {
-  let prompt = session.next();
-
-  while (prompt.type !== "done") {
-    const better = await askBulkComparison(prompt, dependencies);
-    prompt = await session.answer({ better });
-  }
-
-  return prompt;
-}
-
 async function askBulkComparison(
   prompt: Extract<BulkRankingPrompt, { type: "compare" }>,
   dependencies: Pick<CliDependencies, "ask" | "write">,

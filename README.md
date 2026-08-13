@@ -105,10 +105,9 @@ same users the CLI manages.
 ### HTTP API
 
 The server is built on the [Hono](https://hono.dev) router (run on Node via
-`@hono/node-server`) and exposes a small JSON API under `/api`. Placing an item takes several
-comparisons, so adding or re-ranking returns a `sessionId` plus the first
-`prompt`; answer prompts until one has `type: "done"`. An item added to an empty
-category needs no comparisons and comes back done with a `null` session.
+`@hono/node-server`) and exposes a small JSON API under `/api`. Ranking
+comparisons run in each client against the shared core; the server only reads
+and writes persisted rankings through the repository boundary.
 
 | Method & path | Purpose |
 | --- | --- |
@@ -117,10 +116,9 @@ category needs no comparisons and comes back done with a `null` session.
 | `GET /api/users` | List users |
 | `POST /api/users` | Create a user; body `{ name }` |
 | `GET /api/users/:userId/categories/:category/items` | List ranked items |
-| `POST /api/users/:userId/categories/:category/items` | Add an item; body `{ title }` |
+| `PUT /api/users/:userId/categories/:category/ranking` | Save a ranking; body `{ items }` |
 | `DELETE /api/users/:userId/categories/:category/items/:id` | Delete an item |
-| `POST /api/users/:userId/categories/:category/items/:id/rerank` | Start a re-rank session |
-| `POST /api/sessions/:id/answer` | Answer a comparison; body `{ better }` |
 
-Ranking sessions are held in memory in the server process, which suits a
-single-instance deployment.
+The CLI talks to SQLite directly. The web app uses the same core logic with an
+HTTP-backed repository implementation, so both clients share ranking behavior
+while differing only in how they reach storage.

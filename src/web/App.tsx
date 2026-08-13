@@ -1,9 +1,14 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
+import {
+  CatalogService,
+  categories,
+  type CatalogRankingSession,
+} from "../core/index";
 import type { RankingPrompt } from "../core/ranking-session";
 import type { Category, RankedItem, User } from "../core/types";
-import * as api from "./api";
-import type { SessionStarted } from "./api";
+import { HttpCatalogRepository } from "../http/http-catalog-repository";
+import { HttpUserRepository } from "../http/http-user-repository";
 import { AppHeader } from "./components/AppHeader";
 import { CategoryTabs } from "./components/CategoryTabs";
 import { RankingDialog } from "./components/RankingDialog";
@@ -15,12 +20,18 @@ function errorMessage(error: unknown): string {
 }
 
 export function App() {
-  const [categories, setCategories] = useState<readonly Category[]>([]);
+  const catalogRepository = useMemo(() => new HttpCatalogRepository(), []);
+  const userRepository = useMemo(() => new HttpUserRepository(), []);
+  const catalogService = useMemo(
+    () => new CatalogService(catalogRepository, () => crypto.randomUUID()),
+    [catalogRepository],
+  );
+  const rankingSessionRef = useRef<CatalogRankingSession | null>(null);
+
   const [users, setUsers] = useState<readonly User[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentCategory, setCurrentCategory] = useState<Category | null>(null);
   const [items, setItems] = useState<readonly RankedItem[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<RankingPrompt | null>(null);
   const [listVersion, setListVersion] = useState(0);
   const { toast, showToast } = useToast();
@@ -30,21 +41,15 @@ export function App() {
 
     async function loadInitialData() {
       try {
-        const [listedUsers, listedCategories] = await Promise.all([
-          api.listUsers(),
-          api.listCategories(),
-        ]);
-
-        let loadedUsers = listedUsers;
-        if (loadedUsers.length === 0) {
-          loadedUsers = [await api.createUser("default")];
+        let listedUsers = await userRepository.listUsers();
+        if (listedUsers.length === 0) {
+          listedUsers = [await userRepository.createUser("default")];
         }
 
         if (!cancelled) {
-          setUsers(loadedUsers);
-          setCurrentUserId(loadedUsers[0]?.id ?? null);
-          setCategories(listedCategories);
-          setCurrentCategory(listedCategories[0] ?? null);
+          setUsers(listedUsers);
+          setCurrentUserId(listedUsers[0]?.id ?? null);
+          setCurrentCategory(categories[0] ?? null);
         }
       } catch (error) {
         if (!cancelled) showToast(errorMessage(error), true);
@@ -55,7 +60,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [showToast]);
+  }, [showToast, userRepository]);
 
   useEffect(() => {
     if (currentUserId === null || currentCategory === null) {
@@ -64,8 +69,8 @@ export function App() {
     }
 
     let cancelled = false;
-    api
-      .listItems(currentUserId, currentCategory)
+    catalogService
+      .list(currentUserId, currentCategory)
       .then((listedItems) => {
         if (!cancelled) setItems(listedItems);
       })
@@ -76,24 +81,25 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentCategory, currentUserId, listVersion, showToast]);
+  }, [catalogService, currentCategory, currentUserId, listVersion, showToast]);
 
   function finishSession(done: Extract<RankingPrompt, { type: "done" }>) {
+    rankingSessionRef.current = null;
     setPrompt(null);
-    setSessionId(null);
     showToast(
       `Ranked "${done.item.title}" at #${done.item.position} (${done.item.score.toFixed(1)})`,
     );
     setListVersion((version) => version + 1);
   }
 
-  function beginSession(started: SessionStarted) {
-    if (started.prompt.type === "done") {
-      finishSession(started.prompt);
+  function beginSession(session: CatalogRankingSession) {
+    rankingSessionRef.current = session;
+    const firstPrompt = session.next();
+    if (firstPrompt.type === "done") {
+      finishSession(firstPrompt);
       return;
     }
-    setSessionId(started.sessionId);
-    setPrompt(started.prompt);
+    setPrompt(firstPrompt);
   }
 
   async function createUser() {
@@ -101,7 +107,7 @@ export function App() {
     if (name === null || name.trim().length === 0) return;
 
     try {
-      const created = await api.createUser(name.trim());
+      const created = await userRepository.createUser(name.trim());
       setUsers((current) => [...current, created]);
       setCurrentUserId(created.id);
       showToast(`Created user "${created.name}"`);
@@ -123,13 +129,13 @@ export function App() {
     }
 
     try {
-      const started = await api.addItem(
-        currentUserId,
-        currentCategory,
+      const session = await catalogService.addItem({
+        userId: currentUserId,
+        category: currentCategory,
         title,
-      );
+      });
       form.reset();
-      beginSession(started);
+      beginSession(session);
     } catch (error) {
       showToast(errorMessage(error), true);
     }
@@ -145,7 +151,7 @@ export function App() {
     }
 
     try {
-      await api.deleteItem(currentUserId, currentCategory, item.id);
+      await catalogService.delete(currentUserId, currentCategory, item.id);
       showToast(`Deleted "${item.title}"`);
       setListVersion((version) => version + 1);
     } catch (error) {
@@ -157,30 +163,31 @@ export function App() {
     if (currentUserId === null || currentCategory === null) return;
 
     try {
-      const started = await api.rerankItem(
+      const session = await catalogService.rerank(
         currentUserId,
         currentCategory,
         itemId,
       );
-      beginSession(started);
+      beginSession(session);
     } catch (error) {
       showToast(errorMessage(error), true);
     }
   }
 
   async function answer(better: boolean) {
-    if (sessionId === null) return;
+    const session = rankingSessionRef.current;
+    if (session === null) return;
 
     try {
-      const nextPrompt = await api.answerSession(sessionId, better);
+      const nextPrompt = await session.answer({ better });
       if (nextPrompt.type === "done") {
         finishSession(nextPrompt);
       } else {
         setPrompt(nextPrompt);
       }
     } catch (error) {
+      rankingSessionRef.current = null;
       setPrompt(null);
-      setSessionId(null);
       showToast(errorMessage(error), true);
     }
   }
