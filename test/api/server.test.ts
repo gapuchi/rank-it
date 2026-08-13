@@ -1,4 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -16,8 +19,9 @@ interface Harness {
 }
 
 const harnesses: Harness[] = [];
+const temporaryDirectories: string[] = [];
 
-async function startServer(): Promise<Harness> {
+async function startServer(webRoot?: string): Promise<Harness> {
   const catalogRepository = new InMemoryCatalogRepository();
   const userRepository = new InMemoryUserRepository();
   const user = userRepository.createUser("default");
@@ -27,6 +31,7 @@ async function startServer(): Promise<Harness> {
     catalogRepository,
     userRepository,
     generateId: () => `item-${++nextId}`,
+    ...(webRoot === undefined ? {} : { webRoot }),
   });
 
   await new Promise<void>((resolve) => {
@@ -63,6 +68,11 @@ function postJson(body: unknown): RequestInit {
 
 afterEach(async () => {
   await Promise.all(harnesses.splice(0).map((harness) => harness.close()));
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 describe("API server", () => {
@@ -73,6 +83,26 @@ describe("API server", () => {
     expect(await api.json("/api/categories")).toEqual({
       categories: ["movies", "tv-shows", "video-games"],
     });
+  });
+
+  it("serves the built web app without masking unknown API routes", async () => {
+    const webRoot = await mkdtemp(join(tmpdir(), "rank-it-web-"));
+    temporaryDirectories.push(webRoot);
+    await writeFile(join(webRoot, "index.html"), "<h1>rank-it</h1>");
+    const api = await startServer(webRoot);
+
+    const page = await api.request("/");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    expect(await page.text()).toBe("<h1>rank-it</h1>");
+
+    const spaRoute = await api.request("/rankings/movies");
+    expect(spaRoute.status).toBe(200);
+    expect(await spaRoute.text()).toBe("<h1>rank-it</h1>");
+
+    const missingApi = await api.request("/api/missing");
+    expect(missingApi.status).toBe(404);
+    expect(await missingApi.json()).toEqual({ error: "Not found" });
   });
 
   it("lists and creates users", async () => {

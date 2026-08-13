@@ -4,17 +4,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "build": "npm run build:web",
+    "build:web": "vite build",
+    "check": "tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json",
     "rank-it": "tsx src/cli/main.ts",
-    "serve": "tsx src/api/main.ts",
-    "dev": "tsx watch src/api/main.ts",
+    "serve": "npm run build:web && tsx src/api/main.ts",
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch src/api/main.ts",
+    "dev:web": "vite",
     "test": "vitest run"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.15.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "concurrently": "^10.0.4",
     "tsx": "^4.23.11",
     "typescript": "^5.8.3",
+    "vite": "^7.3.6",
     "vitest": "^3.1.3"
   },
   "engines": {
@@ -25,6 +34,8 @@
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "csv-parse": "^7.0.2",
-    "hono": "^4.13.1"
+    "hono": "^4.13.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

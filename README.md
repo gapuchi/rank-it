@@ -9,14 +9,17 @@ Enter the reproducible development shell:
 
 ```sh
 nix develop
+just install
 ```
 
-Run tests and type checking:
+Start the API and React development servers with live reload:
 
 ```sh
-npm test
-npm run check
+just dev
 ```
+
+The app is available at `http://127.0.0.1:5173`. Run `npm test` and
+`npm run check` for tests and type checking.
 
 ## Usage
 
@@ -81,15 +84,15 @@ RANK_IT_DB=/path/to/rank-it.db RANK_IT_USER=Alice npm run rank-it -- list movies
 ## Web app
 
 The CLI and the web app are both thin adapters over the same core
-`CatalogService`, so they share ranking logic and storage. Start the web server:
+`CatalogService`, so they share ranking logic and storage. Build the React app
+and start the production server:
 
 ```sh
-npm run serve
+just serve
 ```
 
-Then open `http://127.0.0.1:4000`. Use `npm run dev` for auto-reload during
-development. The server reads the same `RANK_IT_DB` database as the CLI and can
-be configured with environment variables:
+Then open `http://127.0.0.1:4000`. The server reads the same `RANK_IT_DB`
+database as the CLI and can be configured with environment variables:
 
 - `PORT` — port to listen on (default `4000`)
 - `HOST` — interface to bind (default `127.0.0.1`)

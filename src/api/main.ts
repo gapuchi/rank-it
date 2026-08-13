@@ -23,7 +23,7 @@ function main(): void {
 
   const repository = new SqliteCatalogRepository(databasePath);
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-  const webRoot = join(moduleDirectory, "..", "web");
+  const webRoot = join(moduleDirectory, "..", "..", "dist", "web");
 
   const defaultUserName = process.env.RANK_IT_USER ?? "default";
   if (repository.findUserByName(defaultUserName) === undefined) {
