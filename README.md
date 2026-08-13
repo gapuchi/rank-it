@@ -41,6 +41,24 @@ npm run rank-it -- add video-games "Outer Wilds" --user Alice
 
 The first item in a category is ranked immediately. Every later item is placed with pairwise comparisons against existing entries.
 
+### Confirming movies and TV shows
+
+Set `TMDB_API_KEY` to a [TMDB](https://www.themoviedb.org/settings/api) v3 key
+or v4 read token and rank-it validates that the movies and TV shows you add are
+real. Adding then searches the database and asks which entry you meant, and the
+matched title plus its database ID are stored with the item (nothing else is
+persisted):
+
+```sh
+export TMDB_API_KEY=...
+npm run rank-it -- search movies arrival
+npm run rank-it -- add tv-shows severance
+```
+
+Video games have no provider, so they are always entered by hand. Pass
+`--unverified` to add a movie or show the database does not carry. Without a
+key, everything works as before with hand-entered titles.
+
 Import unordered titles from a CSV file with a `title` column. Each title is
 placed through the same pairwise comparisons and saved as soon as it is ranked:
 
@@ -60,6 +78,13 @@ new ranking for the category from only the imported titles:
 
 ```sh
 npm run rank-it -- import movies ./movies.csv --replace
+```
+
+With a TMDB key configured, `--verify` resolves every row to its best database
+match and skips titles it cannot confirm:
+
+```sh
+npm run rank-it -- import movies ./movies.csv --verify
 ```
 
 List a category:
@@ -98,9 +123,14 @@ database as the CLI and can be configured with environment variables:
 - `HOST` — interface to bind (default `127.0.0.1`)
 - `RANK_IT_DB` — SQLite database path
 - `RANK_IT_USER` — name of the user created on first start (default `default`)
+- `TMDB_API_KEY` — enables title search for movies and TV shows
 
 Rankings are per user, so the page has a user picker that switches between the
-same users the CLI manages.
+same users the CLI manages. With a key set, typing in the add box suggests
+confirmed titles (with posters and years); picking one stores the database
+entry, and confirmed items show a check mark in the list. The key stays on the
+server: the browser reaches the title database through `/api/metadata`, so the
+web client runs the same `CatalogService` flow as the CLI.
 
 ### HTTP API
 
@@ -113,6 +143,9 @@ and writes persisted rankings through the repository boundary.
 | --- | --- |
 | `GET /api/health` | Liveness check |
 | `GET /api/categories` | List categories |
+| `GET /api/metadata/capabilities` | Report whether title search is on, and for which categories |
+| `GET /api/metadata/search?category=&query=&limit=` | Search the title database |
+| `GET /api/metadata/:category/titles/:sourceId` | Fetch one confirmed entry |
 | `GET /api/users` | List users |
 | `POST /api/users` | Create a user; body `{ name }` |
 | `GET /api/users/:userId/categories/:category/items` | List ranked items |

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CatalogRepository } from "../../src/core/catalog-repository.js";
 import { CatalogService } from "../../src/core/catalog-service.js";
+import type { MetadataProvider } from "../../src/core/metadata.js";
 import {
   categories,
   type Category,
@@ -11,6 +12,7 @@ import {
   InMemoryCatalogRepository,
   InMemoryUserRepository,
 } from "../../src/storage/in-memory-catalog-repository.js";
+import { createFakeMetadataProvider } from "../support/fake-metadata-provider.js";
 
 class MemoryCatalogRepository implements CatalogRepository {
   readonly #rankings = new Map<string, Map<Category, Item[]>>();
@@ -59,13 +61,148 @@ function item(id: string, category: Category = "movies"): Item {
 
 async function createFixture(
   repository: MemoryCatalogRepository = new MemoryCatalogRepository(),
+  options: { metadataProvider?: MetadataProvider } = {},
 ) {
   let nextId = 1;
   const users = new InMemoryUserRepository();
   const user = await users.createUser("alice");
-  const service = new CatalogService(repository, () => `new-${nextId++}`);
+  const service = new CatalogService(
+    repository,
+    () => `new-${nextId++}`,
+    options,
+  );
   return { repository, service, users, userId: user.id };
 }
+
+function createSearchableFixture() {
+  return createFixture(new MemoryCatalogRepository(), {
+    metadataProvider: createFakeMetadataProvider(),
+  });
+}
+
+describe("CatalogService metadata", () => {
+  it("reports which categories can be confirmed against a database", async () => {
+    const plain = await createFixture();
+    expect(plain.service.supportsMetadata("movies")).toBe(false);
+
+    const searchable = await createSearchableFixture();
+    expect(searchable.service.supportsMetadata("movies")).toBe(true);
+    expect(searchable.service.supportsMetadata("tv-shows")).toBe(true);
+    expect(searchable.service.supportsMetadata("video-games")).toBe(false);
+  });
+
+  it("searches the title database without changing the catalog", async () => {
+    const { repository, service, userId } = await createSearchableFixture();
+
+    await expect(service.searchMetadata("movies", "arrival")).resolves.toEqual([
+      expect.objectContaining({ sourceId: "1", title: "Arrival" }),
+      expect.objectContaining({ sourceId: "2" }),
+    ]);
+    await expect(
+      service.searchMetadata("movies", "arrival", { limit: 1 }),
+    ).resolves.toHaveLength(1);
+    await expect(repository.getRankedItems(userId, "movies")).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("rejects searches that are unconfigured, unsupported, or empty", async () => {
+    const plain = await createFixture();
+    await expect(
+      plain.service.searchMetadata("movies", "arrival"),
+    ).rejects.toThrow("not configured");
+
+    const { service } = await createSearchableFixture();
+    await expect(service.searchMetadata("video-games", "halo")).rejects.toThrow(
+      "not available for video-games",
+    );
+    await expect(service.searchMetadata("movies", "  ")).rejects.toThrow(
+      "search query is required",
+    );
+  });
+
+  it("adds a confirmed title using the database entry as the source of truth", async () => {
+    const { repository, service, userId } = await createSearchableFixture();
+
+    const session = await service.addMatchedItem({
+      userId,
+      category: "movies",
+      source: "fake-db",
+      sourceId: "1",
+    });
+
+    expect(session.next()).toMatchObject({ type: "done" });
+    await expect(repository.getRankedItems(userId, "movies")).resolves.toEqual([
+      {
+        id: "new-1",
+        category: "movies",
+        title: "Arrival",
+        source: "fake-db",
+        sourceId: "1",
+      },
+    ]);
+  });
+
+  it("refuses titles the database does not know", async () => {
+    const { service, userId } = await createSearchableFixture();
+
+    await expect(
+      service.addMatchedItem({ userId, category: "movies", sourceId: "999" }),
+    ).rejects.toThrow("was not found");
+    await expect(
+      service.addMatchedItem({
+        userId,
+        category: "movies",
+        source: "imdb",
+        sourceId: "1",
+      }),
+    ).rejects.toThrow('Unknown metadata source "imdb"');
+  });
+
+  it("resolves import titles to matches and reports the rest", async () => {
+    const { service } = await createSearchableFixture();
+
+    await expect(
+      service.resolveTitles("movies", ["arrival", "an unknown film"]),
+    ).resolves.toEqual({
+      items: [{ title: "Arrival", source: "fake-db", sourceId: "1" }],
+      unmatched: ["an unknown film"],
+    });
+  });
+
+  it("requires both a source and source ID for confirmed items", async () => {
+    const { service, userId } = await createFixture();
+
+    await expect(
+      service.addItem({
+        userId,
+        category: "movies",
+        title: "Arrival",
+        sourceId: "1",
+      }),
+    ).rejects.toThrow("both a metadata source and source ID");
+  });
+
+  it("keeps provenance when importing confirmed items", async () => {
+    const { repository, service, userId } = await createSearchableFixture();
+    const session = await service.importUnordered({
+      userId,
+      category: "movies",
+      items: [{ title: "Arrival", source: "fake-db", sourceId: "1" }],
+    });
+
+    expect(session.next()).toMatchObject({ type: "done" });
+    await expect(repository.getRankedItems(userId, "movies")).resolves.toEqual([
+      {
+        id: "new-1",
+        category: "movies",
+        title: "Arrival",
+        source: "fake-db",
+        sourceId: "1",
+      },
+    ]);
+  });
+});
 
 describe("CatalogService", () => {
   it("persists the first item as soon as its session completes", async () => {

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createTmdbMetadataProviderFromEnvironment } from "../metadata/index.js";
 import { SqliteCatalogRepository } from "../storage/index.js";
 import { createApiServer } from "./server.js";
 
@@ -30,11 +31,16 @@ async function main(): Promise<void> {
     await repository.createUser(defaultUserName);
   }
 
+  const metadataProvider = createTmdbMetadataProviderFromEnvironment(
+    process.env,
+  );
+
   const server = createApiServer({
     catalogRepository: repository,
     userRepository: repository,
     generateId: randomUUID,
     webRoot,
+    ...(metadataProvider === undefined ? {} : { metadataProvider }),
   });
 
   const port = Number(process.env.PORT ?? 4000);
@@ -43,6 +49,11 @@ async function main(): Promise<void> {
   server.listen(port, host, () => {
     console.log(`rank-it is running at http://${host}:${port}`);
     console.log(`Using database ${databasePath}`);
+    if (metadataProvider === undefined) {
+      console.log(
+        "Title search is off. Set TMDB_API_KEY to confirm movies and TV shows.",
+      );
+    }
   });
 
   const shutdown = (): void => {

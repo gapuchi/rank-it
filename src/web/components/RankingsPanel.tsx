@@ -1,35 +1,35 @@
-import type { FormEvent } from "react";
-
+import type { MetadataMatch } from "../../core/metadata";
 import type { RankedItem } from "../../core/types";
+import { AddPanel } from "./AddPanel";
 import { RankingItem } from "./RankingItem";
 
 interface RankingsPanelProps {
   readonly items: readonly RankedItem[];
-  readonly onAddItem: (event: FormEvent<HTMLFormElement>) => void;
+  readonly searchable: boolean;
+  readonly onAddManual: (title: string) => void;
+  readonly onSearch: (query: string) => Promise<readonly MetadataMatch[]>;
+  readonly onPickMatch: (match: MetadataMatch) => void;
   readonly onRerankItem: (itemId: string) => void;
   readonly onDeleteItem: (item: RankedItem) => void;
 }
 
 export function RankingsPanel({
   items,
-  onAddItem,
+  searchable,
+  onAddManual,
+  onSearch,
+  onPickMatch,
   onRerankItem,
   onDeleteItem,
 }: RankingsPanelProps) {
   return (
     <main className="content">
-      <section className="add-panel">
-        <form id="add-form" autoComplete="off" onSubmit={onAddItem}>
-          <input
-            name="title"
-            type="text"
-            placeholder="Title"
-            required
-            aria-label="Title"
-          />
-          <button type="submit">Add &amp; rank</button>
-        </form>
-      </section>
+      <AddPanel
+        searchable={searchable}
+        onAddManual={onAddManual}
+        onSearch={onSearch}
+        onPickMatch={onPickMatch}
+      />
 
       <section className="list-panel" aria-live="polite">
         {items.length === 0 ? (

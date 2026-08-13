@@ -150,4 +150,80 @@ describe("SqliteCatalogRepository", () => {
     ]);
     await repository.close();
   });
+
+  it("persists the database entry that confirmed an item", async () => {
+    const path = temporaryDatabasePath();
+    const repository = new SqliteCatalogRepository(path);
+    const user = await repository.createUser("tester");
+
+    await repository.saveRanking(user.id, "movies", [
+      {
+        id: "arrival",
+        category: "movies",
+        title: "Arrival",
+        source: "tmdb",
+        sourceId: "329865",
+      },
+      item("moonlight", "movies", "Moonlight"),
+    ]);
+    await repository.close();
+
+    const reopened = new SqliteCatalogRepository(path);
+    expect(await reopened.getRankedItems(user.id, "movies")).toEqual([
+      {
+        id: "arrival",
+        category: "movies",
+        title: "Arrival",
+        source: "tmdb",
+        sourceId: "329865",
+      },
+      item("moonlight", "movies", "Moonlight"),
+    ]);
+    await reopened.close();
+  });
+
+  it("adds source columns when migrating from schema v3", async () => {
+    const path = temporaryDatabasePath();
+    const legacy = new Database(path);
+    legacy.exec(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE
+      );
+      INSERT INTO users (id, name) VALUES ('user-1', 'tester');
+      CREATE TABLE ranked_items (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        category TEXT NOT NULL CHECK (
+          category IN ('movies', 'tv-shows', 'video-games')
+        ),
+        title TEXT NOT NULL,
+        position INTEGER NOT NULL CHECK (position > 0),
+        UNIQUE (user_id, category, position)
+      );
+      INSERT INTO ranked_items (id, user_id, category, title, position)
+      VALUES ('arrival', 'user-1', 'movies', 'Arrival', 1);
+    `);
+    legacy.pragma("user_version = 3");
+    legacy.close();
+
+    const repository = new SqliteCatalogRepository(path);
+    expect(await repository.getRankedItems("user-1", "movies")).toEqual([
+      item("arrival", "movies", "Arrival"),
+    ]);
+
+    await repository.saveRanking("user-1", "movies", [
+      {
+        id: "arrival",
+        category: "movies",
+        title: "Arrival",
+        source: "tmdb",
+        sourceId: "329865",
+      },
+    ]);
+    expect(
+      (await repository.getRankedItems("user-1", "movies"))[0],
+    ).toMatchObject({ source: "tmdb", sourceId: "329865" });
+    await repository.close();
+  });
 });

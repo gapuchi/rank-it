@@ -138,6 +138,75 @@ select:focus {
   }
 }
 
+.title-field {
+  position: relative;
+  display: flex;
+}
+
+.title-field input {
+  width: 100%;
+}
+
+.suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.suggestion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  font-weight: 500;
+  text-align: left;
+}
+
+.suggestion:hover,
+.suggestion:focus-visible {
+  background: var(--panel);
+}
+
+.suggestion img {
+  width: 34px;
+  height: 51px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.suggestion .year {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.add-hint {
+  margin: 10px 2px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.item-title .verified {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 input {
   background: var(--panel-2);
   border: 1px solid var(--border);

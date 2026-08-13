@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../../src/cli/main.js";
+import { createFakeMetadataProvider } from "../support/fake-metadata-provider.js";
 
 const temporaryDirectories: string[] = [];
 
-function createHarness() {
+function createHarness(options: { searchable?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "rank-it-cli-"));
   temporaryDirectories.push(directory);
   const databasePath = join(directory, "rank-it.db");
@@ -33,6 +34,9 @@ function createHarness() {
         write: (message) => output.push(message),
         databasePath,
         generateId: () => `item-${nextId++}`,
+        ...(options.searchable === true
+          ? { metadataProvider: createFakeMetadataProvider() }
+          : {}),
       });
       return output;
     },
@@ -161,5 +165,84 @@ describe("runCli", () => {
     await expect(harness.execute(["list", "books"])).rejects.toThrow(
       "Unknown category",
     );
+  });
+
+  it("searches the title database without adding anything", async () => {
+    const harness = createHarness({ searchable: true });
+
+    await expect(harness.execute(["search", "movies", "arrival"])).resolves.toEqual([
+      "Arrival (2016)  [fake-db:1]",
+      "Arrival of the Sequel (2020)  [fake-db:2]",
+    ]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "No ranked items in movies for default.",
+    ]);
+  });
+
+  it("confirms a typed title against the database before adding it", async () => {
+    const harness = createHarness({ searchable: true });
+
+    await expect(
+      harness.execute(["add", "movies", "arrival"], ["1"]),
+    ).resolves.toEqual([
+      "1) Arrival (2016)  [fake-db:1]",
+      "2) Arrival of the Sequel (2020)  [fake-db:2]",
+      'Ranked "Arrival" at #1 (10.0) for default',
+    ]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "#1  10.0  item-1  Arrival [fake-db]",
+    ]);
+  });
+
+  it("cancels an add when no candidate is chosen", async () => {
+    const harness = createHarness({ searchable: true });
+
+    await expect(
+      harness.execute(["add", "movies", "arrival"], ["n"]),
+    ).resolves.toEqual([
+      "1) Arrival (2016)  [fake-db:1]",
+      "2) Arrival of the Sequel (2020)  [fake-db:2]",
+      "Cancelled. Nothing was added.",
+    ]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "No ranked items in movies for default.",
+    ]);
+  });
+
+  it("rejects titles that the database does not recognize", async () => {
+    const harness = createHarness({ searchable: true });
+
+    await expect(
+      harness.execute(["add", "movies", "not a real film"]),
+    ).rejects.toThrow("--unverified");
+  });
+
+  it("skips the database for --unverified adds and unsupported categories", async () => {
+    const harness = createHarness({ searchable: true });
+
+    await harness.execute(["add", "movies", "Home Movie", "--unverified"]);
+    await harness.execute(["add", "video-games", "Outer Wilds"]);
+
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "#1  10.0  item-1  Home Movie",
+    ]);
+    await expect(harness.execute(["list", "video-games"])).resolves.toEqual([
+      "#1  10.0  item-2  Outer Wilds",
+    ]);
+  });
+
+  it("confirms imported titles with --verify and reports the rest", async () => {
+    const harness = createHarness({ searchable: true });
+    const csv = harness.writeCsv("movies.csv", "title\narrival\nmade up film\n");
+
+    await expect(
+      harness.execute(["import", "movies", csv, "--verify"]),
+    ).resolves.toEqual([
+      'Skipped "made up film": no match in the title database.',
+      "Imported and ranked 1 item in movies for default.",
+    ]);
+    await expect(harness.execute(["list", "movies"])).resolves.toEqual([
+      "#1  10.0  item-1  Arrival [fake-db]",
+    ]);
   });
 });

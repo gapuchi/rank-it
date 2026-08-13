@@ -13,6 +13,7 @@ import {
   type Category,
   type CatalogRepository,
   type Item,
+  type MetadataProvider,
   type UserRepository,
 } from "../core/index.js";
 
@@ -22,6 +23,11 @@ export interface ApiServerOptions {
   readonly generateId?: () => string;
   /** Absolute path to a directory of static web assets to serve. */
   readonly webRoot?: string;
+  /**
+   * External title database used to confirm movies and TV shows. The server
+   * holds the credentials and exposes it to browser clients over `/api/metadata`.
+   */
+  readonly metadataProvider?: MetadataProvider;
 }
 
 class HttpError extends Error {
@@ -48,15 +54,21 @@ interface Handlers {
   readonly catalog: CatalogRepository;
   readonly users: UserRepository;
   readonly webRoot: string | undefined;
+  readonly metadata: MetadataProvider | undefined;
 }
 
 export function createApiServer(options: ApiServerOptions): Server {
   const generateId = options.generateId ?? randomUUID;
   const handlers: Handlers = {
-    service: new CatalogService(options.catalogRepository, generateId),
+    service: new CatalogService(options.catalogRepository, generateId, {
+      ...(options.metadataProvider === undefined
+        ? {}
+        : { metadataProvider: options.metadataProvider }),
+    }),
     catalog: options.catalogRepository,
     users: options.userRepository,
     webRoot: options.webRoot === undefined ? undefined : resolve(options.webRoot),
+    metadata: options.metadataProvider,
   };
 
   const app = buildApp(handlers);
@@ -64,12 +76,54 @@ export function createApiServer(options: ApiServerOptions): Server {
 }
 
 function buildApp(handlers: Handlers): Hono {
-  const { service, catalog, users } = handlers;
+  const { service, catalog, users, metadata } = handlers;
   const app = new Hono();
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
 
   app.get("/api/categories", (c) => c.json({ categories }));
+
+  // Title-database transport for clients that cannot hold provider credentials.
+  app.get("/api/metadata/capabilities", (c) =>
+    c.json({
+      name: metadata?.name ?? null,
+      searchableCategories: categories.filter((category) =>
+        service.supportsMetadata(category),
+      ),
+    }),
+  );
+
+  app.get("/api/metadata/search", async (c) => {
+    const category = validateCategory(c.req.query("category"));
+    const query = c.req.query("query") ?? "";
+    const limitValue = c.req.query("limit");
+    const limit = limitValue === undefined ? undefined : Number(limitValue);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      throw new HttpError(400, "Limit must be a positive integer");
+    }
+
+    const matches = await runCatch(() =>
+      service.searchMetadata(
+        category,
+        query,
+        limit === undefined ? {} : { limit },
+      ),
+    );
+    return c.json({ matches });
+  });
+
+  app.get("/api/metadata/:category/titles/:sourceId", async (c) => {
+    const category = validateCategory(c.req.param("category"));
+    if (metadata === undefined || !metadata.supports(category)) {
+      throw new HttpError(400, `Title search is not available for ${category}`);
+    }
+
+    const match = await metadata.lookup(category, c.req.param("sourceId"));
+    if (match === undefined) {
+      throw new HttpError(404, "Title was not found");
+    }
+    return c.json({ match });
+  });
 
   app.get("/api/users", async (c) =>
     c.json({ users: await users.listUsers() }),
@@ -170,10 +224,28 @@ async function readRankingItems(
       );
     }
 
+    const source = record["source"];
+    const sourceId = record["sourceId"];
+    if (source !== undefined && typeof source !== "string") {
+      throw new HttpError(400, "A ranked item source must be a string");
+    }
+    if (sourceId !== undefined && typeof sourceId !== "string") {
+      throw new HttpError(400, "A ranked item sourceId must be a string");
+    }
+    if ((source === undefined) !== (sourceId === undefined)) {
+      throw new HttpError(
+        400,
+        "A confirmed ranked item needs both a source and sourceId",
+      );
+    }
+
     items.push({
       id,
       category: parsedCategory,
       title: title.trim(),
+      ...(typeof source === "string" && typeof sourceId === "string"
+        ? { source, sourceId }
+        : {}),
     });
   }
 

@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CatalogService,
   categories,
   type CatalogRankingSession,
 } from "../core/index";
+import type { MetadataMatch } from "../core/metadata";
 import type { RankingPrompt } from "../core/ranking-session";
 import type { Category, RankedItem, User } from "../core/types";
 import { HttpCatalogRepository } from "../http/http-catalog-repository";
+import {
+  fetchMetadataCapabilities,
+  HttpMetadataProvider,
+} from "../http/http-metadata-provider";
 import { HttpUserRepository } from "../http/http-user-repository";
 import { AppHeader } from "./components/AppHeader";
 import { CategoryTabs } from "./components/CategoryTabs";
@@ -22,10 +27,28 @@ function errorMessage(error: unknown): string {
 export function App() {
   const catalogRepository = useMemo(() => new HttpCatalogRepository(), []);
   const userRepository = useMemo(() => new HttpUserRepository(), []);
-  const catalogService = useMemo(
-    () => new CatalogService(catalogRepository, () => crypto.randomUUID()),
-    [catalogRepository],
-  );
+  const [searchableCategories, setSearchableCategories] = useState<
+    readonly Category[]
+  >([]);
+  const [providerName, setProviderName] = useState<string | null>(null);
+
+  // The server holds the title-database credentials, so the browser reaches it
+  // through an HTTP provider and only when the server reports it is available.
+  const catalogService = useMemo(() => {
+    const metadataProvider =
+      searchableCategories.length === 0
+        ? undefined
+        : new HttpMetadataProvider({
+            searchableCategories,
+            ...(providerName === null ? {} : { name: providerName }),
+          });
+
+    return new CatalogService(
+      catalogRepository,
+      () => crypto.randomUUID(),
+      metadataProvider === undefined ? {} : { metadataProvider },
+    );
+  }, [catalogRepository, providerName, searchableCategories]);
   const rankingSessionRef = useRef<CatalogRankingSession | null>(null);
 
   const [users, setUsers] = useState<readonly User[]>([]);
@@ -50,6 +73,13 @@ export function App() {
           setUsers(listedUsers);
           setCurrentUserId(listedUsers[0]?.id ?? null);
           setCurrentCategory(categories[0] ?? null);
+        }
+
+        // Title search is optional; its absence must not block the app.
+        const capabilities = await fetchMetadataCapabilities().catch(() => null);
+        if (!cancelled && capabilities !== null) {
+          setSearchableCategories(capabilities.searchableCategories);
+          setProviderName(capabilities.name);
         }
       } catch (error) {
         if (!cancelled) showToast(errorMessage(error), true);
@@ -116,17 +146,8 @@ export function App() {
     }
   }
 
-  async function addItem(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function addManual(title: string) {
     if (currentUserId === null || currentCategory === null) return;
-
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-    const title = String(formData.get("title") ?? "").trim();
-    if (title.length === 0) {
-      showToast("A title is required", true);
-      return;
-    }
 
     try {
       const session = await catalogService.addItem({
@@ -134,7 +155,30 @@ export function App() {
         category: currentCategory,
         title,
       });
-      form.reset();
+      beginSession(session);
+    } catch (error) {
+      showToast(errorMessage(error), true);
+    }
+  }
+
+  const searchTitles = useCallback(
+    async (query: string): Promise<readonly MetadataMatch[]> => {
+      if (currentCategory === null) return [];
+      return catalogService.searchMetadata(currentCategory, query, { limit: 5 });
+    },
+    [catalogService, currentCategory],
+  );
+
+  async function pickMatch(match: MetadataMatch) {
+    if (currentUserId === null || currentCategory === null) return;
+
+    try {
+      const session = await catalogService.addMatchedItem({
+        userId: currentUserId,
+        category: currentCategory,
+        source: match.source,
+        sourceId: match.sourceId,
+      });
       beginSession(session);
     } catch (error) {
       showToast(errorMessage(error), true);
@@ -207,7 +251,13 @@ export function App() {
       />
       <RankingsPanel
         items={items}
-        onAddItem={addItem}
+        searchable={
+          currentCategory !== null &&
+          catalogService.supportsMetadata(currentCategory)
+        }
+        onAddManual={(title) => void addManual(title)}
+        onSearch={searchTitles}
+        onPickMatch={(match) => void pickMatch(match)}
         onRerankItem={(itemId) => void startRerank(itemId)}
         onDeleteItem={(item) => void deleteItem(item)}
       />
