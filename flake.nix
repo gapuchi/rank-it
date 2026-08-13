@@ -23,9 +23,8 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
+              just
               nodejs_22
-              pkg-config
-              python3
               sqlite
             ];
           };
