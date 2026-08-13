@@ -17,7 +17,7 @@ function defaultDatabasePath(environment: NodeJS.ProcessEnv): string {
   return join(dataDirectory, "rank-it", "rank-it.db");
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const databasePath = defaultDatabasePath(process.env);
   mkdirSync(dirname(databasePath), { recursive: true });
 
@@ -26,8 +26,8 @@ function main(): void {
   const webRoot = join(moduleDirectory, "..", "..", "dist", "web");
 
   const defaultUserName = process.env.RANK_IT_USER ?? "default";
-  if (repository.findUserByName(defaultUserName) === undefined) {
-    repository.createUser(defaultUserName);
+  if ((await repository.findUserByName(defaultUserName)) === undefined) {
+    await repository.createUser(defaultUserName);
   }
 
   const server = createApiServer({
@@ -47,8 +47,15 @@ function main(): void {
 
   const shutdown = (): void => {
     server.close(() => {
-      repository.close();
-      process.exit(0);
+      void repository.close().then(
+        () => process.exit(0),
+        (error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.error(`Failed to close database: ${message}`);
+          process.exit(1);
+        },
+      );
     });
   };
 
@@ -56,4 +63,8 @@ function main(): void {
   process.on("SIGTERM", shutdown);
 }
 
-main();
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Error: ${message}`);
+  process.exitCode = 1;
+});

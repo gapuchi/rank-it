@@ -14,15 +14,18 @@ export class InMemoryCatalogRepository implements CatalogRepository {
     return rankings;
   }
 
-  getRankedItems(userId: string, category: Category): readonly Item[] {
+  async getRankedItems(
+    userId: string,
+    category: Category,
+  ): Promise<readonly Item[]> {
     return [...(this.#rankingsForUser(userId).get(category) ?? [])];
   }
 
-  saveRanking(
+  async saveRanking(
     userId: string,
     category: Category,
     items: readonly Item[],
-  ): void {
+  ): Promise<void> {
     if (items.some((item) => item.category !== category)) {
       throw new Error("Cannot save an item under another category");
     }
@@ -33,7 +36,7 @@ export class InMemoryCatalogRepository implements CatalogRepository {
     this.#rankingsForUser(userId).set(category, [...items]);
   }
 
-  close(): void {}
+  async close(): Promise<void> {}
 }
 
 export class InMemoryUserRepository implements UserRepository {
@@ -41,13 +44,13 @@ export class InMemoryUserRepository implements UserRepository {
   readonly #names = new Map<string, string>();
   #nextId = 1;
 
-  listUsers(): readonly { id: string; name: string }[] {
+  async listUsers(): Promise<readonly { id: string; name: string }[]> {
     return [...this.#users.values()].sort((left, right) =>
       left.name.localeCompare(right.name),
     );
   }
 
-  createUser(name: string): { id: string; name: string } {
+  async createUser(name: string): Promise<{ id: string; name: string }> {
     const trimmed = name.trim();
     if (trimmed.length === 0) {
       throw new Error("User name is required");
@@ -63,10 +66,12 @@ export class InMemoryUserRepository implements UserRepository {
     return user;
   }
 
-  findUserByName(name: string): { id: string; name: string } | undefined {
+  async findUserByName(
+    name: string,
+  ): Promise<{ id: string; name: string } | undefined> {
     const id = this.#names.get(name.trim().toLowerCase());
     return id === undefined ? undefined : this.#users.get(id);
   }
 
-  close(): void {}
+  async close(): Promise<void> {}
 }

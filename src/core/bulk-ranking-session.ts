@@ -30,7 +30,7 @@ export class BulkRankingSession {
   #session: RankingSession | undefined;
   #prompt: BulkRankingPrompt;
 
-  constructor(
+  private constructor(
     repository: CatalogRepository,
     userId: string,
     category: Category,
@@ -52,23 +52,47 @@ export class BulkRankingSession {
     this.#category = category;
     this.#pendingItems = [...items];
     this.#rankedItems = [...rankedItems];
-    this.#prompt = this.#startNextItem();
+    this.#prompt = {
+      type: "done",
+      imported: 0,
+      total: this.#pendingItems.length,
+    };
+  }
+
+  static async create(
+    repository: CatalogRepository,
+    userId: string,
+    category: Category,
+    items: readonly Item[],
+    rankedItems: readonly Item[],
+  ): Promise<BulkRankingSession> {
+    const session = new BulkRankingSession(
+      repository,
+      userId,
+      category,
+      items,
+      rankedItems,
+    );
+    session.#prompt = await session.#startNextItem();
+    return session;
   }
 
   next(): BulkRankingPrompt {
     return this.#prompt;
   }
 
-  answer(answer: RankingAnswer): BulkRankingPrompt {
+  async answer(answer: RankingAnswer): Promise<BulkRankingPrompt> {
     if (this.#prompt.type === "done" || this.#session === undefined) {
       throw new Error("This bulk ranking session is already complete");
     }
 
-    this.#prompt = this.#handleRankingPrompt(this.#session.answer(answer));
+    this.#prompt = await this.#handleRankingPrompt(
+      this.#session.answer(answer),
+    );
     return this.#prompt;
   }
 
-  #startNextItem(): BulkRankingPrompt {
+  async #startNextItem(): Promise<BulkRankingPrompt> {
     const item = this.#pendingItems[this.#imported];
     if (item === undefined) {
       this.#session = undefined;
@@ -83,7 +107,9 @@ export class BulkRankingSession {
     return this.#handleRankingPrompt(this.#session.next());
   }
 
-  #handleRankingPrompt(prompt: RankingPrompt): BulkRankingPrompt {
+  async #handleRankingPrompt(
+    prompt: RankingPrompt,
+  ): Promise<BulkRankingPrompt> {
     if (prompt.type === "compare") {
       return {
         ...prompt,
@@ -95,7 +121,11 @@ export class BulkRankingSession {
     const { position: _, score: __, ...item } = prompt.item;
     const nextItems = [...this.#rankedItems];
     nextItems.splice(prompt.item.position - 1, 0, item);
-    this.#repository.saveRanking(this.#userId, this.#category, nextItems);
+    await this.#repository.saveRanking(
+      this.#userId,
+      this.#category,
+      nextItems,
+    );
     this.#rankedItems = nextItems;
     this.#imported += 1;
     return this.#startNextItem();

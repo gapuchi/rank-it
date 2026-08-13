@@ -33,20 +33,20 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
     this.#migrate();
   }
 
-  listUsers(): readonly User[] {
+  async listUsers(): Promise<readonly User[]> {
     const rows = this.#database
       .prepare("SELECT id, name FROM users ORDER BY name COLLATE NOCASE ASC")
       .all() as UserRow[];
     return rows;
   }
 
-  createUser(name: string): User {
+  async createUser(name: string): Promise<User> {
     const trimmed = name.trim();
     if (trimmed.length === 0) {
       throw new Error("User name is required");
     }
 
-    const existing = this.findUserByName(trimmed);
+    const existing = await this.findUserByName(trimmed);
     if (existing !== undefined) {
       throw new Error(`User "${trimmed}" already exists`);
     }
@@ -58,7 +58,7 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
     return user;
   }
 
-  findUserByName(name: string): User | undefined {
+  async findUserByName(name: string): Promise<User | undefined> {
     const row = this.#database
       .prepare(
         "SELECT id, name FROM users WHERE name = ? COLLATE NOCASE LIMIT 1",
@@ -67,7 +67,10 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
     return row;
   }
 
-  getRankedItems(userId: string, category: Category): readonly Item[] {
+  async getRankedItems(
+    userId: string,
+    category: Category,
+  ): Promise<readonly Item[]> {
     const rows = this.#database
       .prepare(
         `SELECT id, category, title
@@ -84,11 +87,11 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
     }));
   }
 
-  saveRanking(
+  async saveRanking(
     userId: string,
     category: Category,
     items: readonly Item[],
-  ): void {
+  ): Promise<void> {
     if (items.some((item) => item.category !== category)) {
       throw new Error("Cannot save an item under another category");
     }
@@ -121,7 +124,7 @@ export class SqliteCatalogRepository implements CatalogRepository, UserRepositor
     replaceRanking();
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.#database.close();
   }
 

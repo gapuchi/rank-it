@@ -61,8 +61,8 @@ export async function runCli(
   users
     .command("list")
     .description("List users")
-    .action(() => {
-      const listed = repository.listUsers();
+    .action(async () => {
+      const listed = await repository.listUsers();
       if (listed.length === 0) {
         dependencies.write("No users yet. Create one with: users create <name>");
         return;
@@ -76,12 +76,12 @@ export async function runCli(
     .command("create")
     .description("Create a user")
     .argument("<name...>", "user name")
-    .action((nameParts: string[]) => {
+    .action(async (nameParts: string[]) => {
       const name = nameParts.join(" ").trim();
       if (name.length === 0) {
         throw new Error("A user name is required");
       }
-      const user = repository.createUser(name);
+      const user = await repository.createUser(name);
       dependencies.write(`Created user "${user.name}" (${user.id})`);
     });
 
@@ -97,9 +97,13 @@ export async function runCli(
         throw new Error("A title is required");
       }
       const category = parseCategory(categoryValue);
-      const user = resolveUser(repository, options.user, dependencies);
+      const user = await resolveUser(
+        repository,
+        options.user,
+        dependencies,
+      );
       const service = new CatalogService(repository, dependencies.generateId);
-      const session = service.addItem({
+      const session = await service.addItem({
         userId: user.id,
         category,
         title,
@@ -129,15 +133,20 @@ export async function runCli(
           throw new Error("CSV does not contain any titles");
         }
 
-        const user = resolveUser(repository, options.user, dependencies);
+        const user = await resolveUser(
+          repository,
+          options.user,
+          dependencies,
+        );
         const service = new CatalogService(repository, dependencies.generateId);
+        const session = await service.importUnordered({
+          userId: user.id,
+          category,
+          titles,
+          mode: options.replace === true ? "replace" : "append",
+        });
         const result = await completeBulkRanking(
-          service.importUnordered({
-            userId: user.id,
-            category,
-            titles,
-            mode: options.replace === true ? "replace" : "append",
-          }),
+          session,
           dependencies,
         );
         dependencies.write(
@@ -151,11 +160,15 @@ export async function runCli(
     .description("List ranked items in a category")
     .argument("<category>", "movies | tv-shows | video-games")
     .option("--user <name>", "user name")
-    .action((categoryValue: string, options: UserOption) => {
+    .action(async (categoryValue: string, options: UserOption) => {
       const category = parseCategory(categoryValue);
-      const user = resolveUser(repository, options.user, dependencies);
+      const user = await resolveUser(
+        repository,
+        options.user,
+        dependencies,
+      );
       const service = new CatalogService(repository, dependencies.generateId);
-      const items = service.list(user.id, category);
+      const items = await service.list(user.id, category);
       if (items.length === 0) {
         dependencies.write(`No ranked items in ${category} for ${user.name}.`);
         return;
@@ -173,11 +186,15 @@ export async function runCli(
     .argument("<category>", "movies | tv-shows | video-games")
     .argument("<item-id>", "item ID")
     .option("--user <name>", "user name")
-    .action((categoryValue: string, itemId: string, options: UserOption) => {
+    .action(async (categoryValue: string, itemId: string, options: UserOption) => {
       const category = parseCategory(categoryValue);
-      const user = resolveUser(repository, options.user, dependencies);
+      const user = await resolveUser(
+        repository,
+        options.user,
+        dependencies,
+      );
       const service = new CatalogService(repository, dependencies.generateId);
-      service.delete(user.id, category, itemId);
+      await service.delete(user.id, category, itemId);
       dependencies.write(`Deleted ${itemId} from ${category} for ${user.name}.`);
     });
 
@@ -189,10 +206,19 @@ export async function runCli(
     .option("--user <name>", "user name")
     .action(async (categoryValue: string, itemId: string, options: UserOption) => {
       const category = parseCategory(categoryValue);
-      const user = resolveUser(repository, options.user, dependencies);
+      const user = await resolveUser(
+        repository,
+        options.user,
+        dependencies,
+      );
       const service = new CatalogService(repository, dependencies.generateId);
+      const session = await service.rerank(
+        user.id,
+        category,
+        itemId,
+      );
       const result = await completeRanking(
-        service.rerank(user.id, category, itemId),
+        session,
         dependencies,
       );
       dependencies.write(
@@ -215,17 +241,17 @@ export async function runCli(
     }
     throw error;
   } finally {
-    repository.close();
+    await repository.close();
   }
 }
 
-function resolveUser(
+async function resolveUser(
   repository: UserRepository,
   userFlag: string | undefined,
   dependencies: Pick<CliDependencies, "defaultUserName" | "write">,
-): { id: string; name: string } {
+): Promise<{ id: string; name: string }> {
   const requestedName = userFlag ?? dependencies.defaultUserName ?? "default";
-  const existing = repository.findUserByName(requestedName);
+  const existing = await repository.findUserByName(requestedName);
   if (existing !== undefined) {
     return existing;
   }
@@ -252,7 +278,7 @@ async function completeRanking(
 
   while (prompt.type !== "done") {
     const better = await askComparison(prompt, dependencies);
-    prompt = session.answer({ better });
+    prompt = await session.answer({ better });
   }
 
   return prompt;
@@ -266,7 +292,7 @@ async function completeBulkRanking(
 
   while (prompt.type !== "done") {
     const better = await askBulkComparison(prompt, dependencies);
-    prompt = session.answer({ better });
+    prompt = await session.answer({ better });
   }
 
   return prompt;

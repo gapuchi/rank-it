@@ -15,59 +15,68 @@ function item(
 }
 
 describe("InMemoryCatalogRepository", () => {
-  it("stores rankings per category independently", () => {
+  it("stores rankings per category independently", async () => {
     const repository = new InMemoryCatalogRepository();
     const userId = "user-1";
-    repository.saveRanking(userId, "movies", [
+    await repository.saveRanking(userId, "movies", [
       item("movie-a", "movies"),
       item("movie-b", "movies"),
     ]);
-    repository.saveRanking(userId, "video-games", [item("game-a", "video-games")]);
+    await repository.saveRanking(userId, "video-games", [
+      item("game-a", "video-games"),
+    ]);
 
     expect(
-      repository.getRankedItems(userId, "movies").map(({ id }) => id),
+      (await repository.getRankedItems(userId, "movies")).map(({ id }) => id),
     ).toEqual(["movie-a", "movie-b"]);
     expect(
-      repository.getRankedItems(userId, "video-games").map(({ id }) => id),
+      (await repository.getRankedItems(userId, "video-games")).map(
+        ({ id }) => id,
+      ),
     ).toEqual(["game-a"]);
   });
 
-  it("returns copies so callers cannot mutate stored state", () => {
+  it("returns copies so callers cannot mutate stored state", async () => {
     const repository = new InMemoryCatalogRepository();
     const userId = "user-1";
-    repository.saveRanking(userId, "movies", [item("movie-a", "movies")]);
+    await repository.saveRanking(userId, "movies", [item("movie-a", "movies")]);
 
-    const first = repository.getRankedItems(userId, "movies") as Item[];
+    const first = (await repository.getRankedItems(
+      userId,
+      "movies",
+    )) as Item[];
     first.push(item("movie-b", "movies"));
 
     expect(
-      repository.getRankedItems(userId, "movies").map(({ id }) => id),
+      (await repository.getRankedItems(userId, "movies")).map(({ id }) => id),
     ).toEqual(["movie-a"]);
   });
 
-  it("rejects mismatched categories and duplicate IDs", () => {
+  it("rejects mismatched categories and duplicate IDs", async () => {
     const repository = new InMemoryCatalogRepository();
     const userId = "user-1";
 
-    expect(() =>
+    await expect(
       repository.saveRanking(userId, "movies", [item("game-a", "video-games")]),
-    ).toThrow("another category");
-    expect(() =>
+    ).rejects.toThrow("another category");
+    await expect(
       repository.saveRanking(userId, "movies", [
         item("movie-a", "movies"),
         item("movie-a", "movies", "Duplicate"),
       ]),
-    ).toThrow("duplicate item IDs");
+    ).rejects.toThrow("duplicate item IDs");
   });
 });
 
 describe("InMemoryUserRepository", () => {
-  it("creates and finds users by case-insensitive name", () => {
+  it("creates and finds users by case-insensitive name", async () => {
     const repository = new InMemoryUserRepository();
-    const user = repository.createUser("Alice");
+    const user = await repository.createUser("Alice");
 
-    expect(repository.findUserByName("alice")).toEqual(user);
-    expect(repository.listUsers()).toEqual([user]);
-    expect(() => repository.createUser("alice")).toThrow("already exists");
+    expect(await repository.findUserByName("alice")).toEqual(user);
+    expect(await repository.listUsers()).toEqual([user]);
+    await expect(repository.createUser("alice")).rejects.toThrow(
+      "already exists",
+    );
   });
 });

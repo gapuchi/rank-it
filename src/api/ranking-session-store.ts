@@ -64,14 +64,17 @@ export class RankingSessionStore {
     return { sessionId, prompt };
   }
 
-  answer(sessionId: string, answer: RankingAnswer): RankingPrompt {
+  async answer(
+    sessionId: string,
+    answer: RankingAnswer,
+  ): Promise<RankingPrompt> {
     this.#prune();
     const stored = this.#sessions.get(sessionId);
     if (stored === undefined) {
       throw new SessionNotFoundError(sessionId);
     }
 
-    const prompt = stored.session.answer(answer);
+    const prompt = await stored.session.answer(answer);
     if (prompt.type === "done") {
       this.#sessions.delete(sessionId);
     } else {

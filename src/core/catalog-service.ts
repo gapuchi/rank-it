@@ -29,7 +29,7 @@ export class CatalogRankingSession {
   readonly #session: RankingSession;
   #saved = false;
 
-  constructor(
+  private constructor(
     repository: CatalogRepository,
     userId: string,
     item: Item,
@@ -40,20 +40,35 @@ export class CatalogRankingSession {
     this.#category = item.category;
     this.#originalItems = [...rankedItems];
     this.#session = new RankingSession(item, rankedItems);
-    this.#saveIfComplete(this.#session.next());
+  }
+
+  static async create(
+    repository: CatalogRepository,
+    userId: string,
+    item: Item,
+    rankedItems: readonly Item[],
+  ): Promise<CatalogRankingSession> {
+    const session = new CatalogRankingSession(
+      repository,
+      userId,
+      item,
+      rankedItems,
+    );
+    await session.#saveIfComplete(session.#session.next());
+    return session;
   }
 
   next(): RankingPrompt {
     return this.#session.next();
   }
 
-  answer(answer: RankingAnswer): RankingPrompt {
+  async answer(answer: RankingAnswer): Promise<RankingPrompt> {
     const prompt = this.#session.answer(answer);
-    this.#saveIfComplete(prompt);
+    await this.#saveIfComplete(prompt);
     return prompt;
   }
 
-  #saveIfComplete(prompt: RankingPrompt): void {
+  async #saveIfComplete(prompt: RankingPrompt): Promise<void> {
     if (prompt.type !== "done" || this.#saved) {
       return;
     }
@@ -61,7 +76,11 @@ export class CatalogRankingSession {
     const { position: _, score: __, ...item } = prompt.item;
     const nextItems = [...this.#originalItems];
     nextItems.splice(prompt.item.position - 1, 0, item);
-    this.#repository.saveRanking(this.#userId, this.#category, nextItems);
+    await this.#repository.saveRanking(
+      this.#userId,
+      this.#category,
+      nextItems,
+    );
     this.#saved = true;
   }
 }
@@ -75,13 +94,13 @@ export class CatalogService {
     this.#generateId = generateId;
   }
 
-  addItem(input: AddItemInput): CatalogRankingSession {
+  async addItem(input: AddItemInput): Promise<CatalogRankingSession> {
     const item = this.#buildItem(input);
-    const rankedItems = this.#repository.getRankedItems(
+    const rankedItems = await this.#repository.getRankedItems(
       input.userId,
       input.category,
     );
-    return new CatalogRankingSession(
+    return CatalogRankingSession.create(
       this.#repository,
       input.userId,
       item,
@@ -89,7 +108,9 @@ export class CatalogService {
     );
   }
 
-  importUnordered(input: ImportUnorderedInput): BulkRankingSession {
+  async importUnordered(
+    input: ImportUnorderedInput,
+  ): Promise<BulkRankingSession> {
     if (input.titles.length === 0) {
       throw new Error("At least one title is required for import");
     }
@@ -104,7 +125,10 @@ export class CatalogService {
     const rankedItems =
       input.mode === "replace"
         ? []
-        : this.#repository.getRankedItems(input.userId, input.category);
+        : await this.#repository.getRankedItems(
+            input.userId,
+            input.category,
+          );
     const knownTitles = new Set(rankedItems.map(({ title }) => title));
     const uniqueTitles = titles.filter((title) => {
       if (knownTitles.has(title)) {
@@ -119,7 +143,7 @@ export class CatalogService {
       title,
     }));
 
-    return new BulkRankingSession(
+    return BulkRankingSession.create(
       this.#repository,
       input.userId,
       input.category,
@@ -128,8 +152,11 @@ export class CatalogService {
     );
   }
 
-  list(userId: string, category: Category): readonly RankedItem[] {
-    const items = this.#repository.getRankedItems(userId, category);
+  async list(
+    userId: string,
+    category: Category,
+  ): Promise<readonly RankedItem[]> {
+    const items = await this.#repository.getRankedItems(userId, category);
     return items.map((item, index) => ({
       ...item,
       position: index + 1,
@@ -137,29 +164,33 @@ export class CatalogService {
     }));
   }
 
-  delete(userId: string, category: Category, itemId: string): void {
-    const items = this.#repository.getRankedItems(userId, category);
+  async delete(
+    userId: string,
+    category: Category,
+    itemId: string,
+  ): Promise<void> {
+    const items = await this.#repository.getRankedItems(userId, category);
     const remainingItems = items.filter(({ id }) => id !== itemId);
     if (remainingItems.length === items.length) {
       throw new Error(`Item "${itemId}" was not found in ${category}`);
     }
 
-    this.#repository.saveRanking(userId, category, remainingItems);
+    await this.#repository.saveRanking(userId, category, remainingItems);
   }
 
-  rerank(
+  async rerank(
     userId: string,
     category: Category,
     itemId: string,
-  ): CatalogRankingSession {
-    const items = this.#repository.getRankedItems(userId, category);
+  ): Promise<CatalogRankingSession> {
+    const items = await this.#repository.getRankedItems(userId, category);
     const item = items.find(({ id }) => id === itemId);
     if (item === undefined) {
       throw new Error(`Item "${itemId}" was not found in ${category}`);
     }
 
     const otherItems = items.filter(({ id }) => id !== itemId);
-    return new CatalogRankingSession(
+    return CatalogRankingSession.create(
       this.#repository,
       userId,
       item,

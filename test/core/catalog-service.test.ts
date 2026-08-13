@@ -24,25 +24,32 @@ class MemoryCatalogRepository implements CatalogRepository {
     return rankings;
   }
 
-  getRankedItems(userId: string, category: Category): readonly Item[] {
+  async getRankedItems(
+    userId: string,
+    category: Category,
+  ): Promise<readonly Item[]> {
     return [...(this.#rankingsForUser(userId).get(category) ?? [])];
   }
 
-  saveRanking(
+  async saveRanking(
     userId: string,
     category: Category,
     items: readonly Item[],
-  ): void {
+  ): Promise<void> {
     if (items.some((item) => item.category !== category)) {
       throw new Error("Cannot save an item under another category");
     }
     this.#rankingsForUser(userId).set(category, [...items]);
   }
 
-  close(): void {}
+  async close(): Promise<void> {}
 
-  seed(userId: string, category: Category, items: readonly Item[]): void {
-    this.saveRanking(userId, category, items);
+  async seed(
+    userId: string,
+    category: Category,
+    items: readonly Item[],
+  ): Promise<void> {
+    await this.saveRanking(userId, category, items);
   }
 }
 
@@ -50,26 +57,28 @@ function item(id: string, category: Category = "movies"): Item {
   return { id, category, title: id.toUpperCase() };
 }
 
-function createFixture(repository: MemoryCatalogRepository = new MemoryCatalogRepository()) {
+async function createFixture(
+  repository: MemoryCatalogRepository = new MemoryCatalogRepository(),
+) {
   let nextId = 1;
   const users = new InMemoryUserRepository();
-  const user = users.createUser("alice");
+  const user = await users.createUser("alice");
   const service = new CatalogService(repository, () => `new-${nextId++}`);
   return { repository, service, users, userId: user.id };
 }
 
 describe("CatalogService", () => {
-  it("persists the first item as soon as its session completes", () => {
-    const { repository, service, userId } = createFixture();
+  it("persists the first item as soon as its session completes", async () => {
+    const { repository, service, userId } = await createFixture();
 
-    const session = service.addItem({
+    const session = await service.addItem({
       userId,
       category: "video-games",
       title: "  Outer Wilds  ",
     });
 
     expect(session.next()).toMatchObject({ type: "done" });
-    expect(repository.getRankedItems(userId, "video-games")).toEqual([
+    expect(await repository.getRankedItems(userId, "video-games")).toEqual([
       {
         id: "new-1",
         category: "video-games",
@@ -78,10 +87,10 @@ describe("CatalogService", () => {
     ]);
   });
 
-  it("persists an item in the position chosen by comparisons", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [item("best"), item("worst")]);
-    const session = service.addItem({
+  it("persists an item in the position chosen by comparisons", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [item("best"), item("worst")]);
+    const session = await service.addItem({
       userId,
       category: "movies",
       title: "Middle",
@@ -91,22 +100,22 @@ describe("CatalogService", () => {
       type: "compare",
       against: item("worst"),
     });
-    expect(session.answer({ better: true })).toMatchObject({
+    expect(await session.answer({ better: true })).toMatchObject({
       type: "compare",
       against: item("best"),
     });
-    expect(session.answer({ better: false })).toMatchObject({
+    expect(await session.answer({ better: false })).toMatchObject({
       type: "done",
       item: { position: 2 },
     });
     expect(
-      repository.getRankedItems(userId, "movies").map(({ id }) => id),
+      (await repository.getRankedItems(userId, "movies")).map(({ id }) => id),
     ).toEqual(["best", "new-1", "worst"]);
   });
 
-  it("bulk-ranks unordered titles and persists each completed item", () => {
-    const { repository, service, userId } = createFixture();
-    const session = service.importUnordered({
+  it("bulk-ranks unordered titles and persists each completed item", async () => {
+    const { repository, service, userId } = await createFixture();
+    const session = await service.importUnordered({
       userId,
       category: "movies",
       titles: ["Arrival", "Moonlight", "Parasite"],
@@ -120,10 +129,12 @@ describe("CatalogService", () => {
       total: 3,
     });
     expect(
-      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+      (await repository.getRankedItems(userId, "movies")).map(
+        ({ title }) => title,
+      ),
     ).toEqual(["Arrival"]);
 
-    expect(session.answer({ better: false })).toMatchObject({
+    expect(await session.answer({ better: false })).toMatchObject({
       type: "compare",
       item: { title: "Parasite" },
       against: { title: "Moonlight" },
@@ -131,28 +142,32 @@ describe("CatalogService", () => {
       total: 3,
     });
     expect(
-      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+      (await repository.getRankedItems(userId, "movies")).map(
+        ({ title }) => title,
+      ),
     ).toEqual(["Arrival", "Moonlight"]);
 
-    expect(session.answer({ better: true })).toMatchObject({
+    expect(await session.answer({ better: true })).toMatchObject({
       type: "compare",
       against: { title: "Arrival" },
     });
-    expect(session.answer({ better: false })).toEqual({
+    expect(await session.answer({ better: false })).toEqual({
       type: "done",
       imported: 3,
       total: 3,
     });
     expect(
-      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+      (await repository.getRankedItems(userId, "movies")).map(
+        ({ title }) => title,
+      ),
     ).toEqual(["Arrival", "Parasite", "Moonlight"]);
   });
 
-  it("appends imports to an existing ranking by default", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [item("best"), item("worst")]);
+  it("appends imports to an existing ranking by default", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [item("best"), item("worst")]);
 
-    const session = service.importUnordered({
+    const session = await service.importUnordered({
       userId,
       category: "movies",
       titles: ["Middle"],
@@ -161,24 +176,24 @@ describe("CatalogService", () => {
       type: "compare",
       against: item("worst"),
     });
-    session.answer({ better: true });
-    expect(session.answer({ better: false })).toEqual({
+    await session.answer({ better: true });
+    expect(await session.answer({ better: false })).toEqual({
       type: "done",
       imported: 1,
       total: 1,
     });
     expect(
-      repository.getRankedItems(userId, "movies").map(({ id }) => id),
+      (await repository.getRankedItems(userId, "movies")).map(({ id }) => id),
     ).toEqual(["best", "new-1", "worst"]);
   });
 
-  it("ignores exact duplicate titles within and before an append import", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [
+  it("ignores exact duplicate titles within and before an append import", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [
       { id: "existing", category: "movies", title: "Arrival" },
     ]);
 
-    const session = service.importUnordered({
+    const session = await service.importUnordered({
       userId,
       category: "movies",
       titles: [" Arrival ", "Moonlight", "Moonlight", "moonlight"],
@@ -189,25 +204,27 @@ describe("CatalogService", () => {
       item: { id: "new-1", title: "Moonlight" },
       total: 2,
     });
-    session.answer({ better: false });
-    session.answer({ better: false });
+    await session.answer({ better: false });
+    await session.answer({ better: false });
     expect(session.next()).toEqual({
       type: "done",
       imported: 2,
       total: 2,
     });
     expect(
-      repository.getRankedItems(userId, "movies").map(({ title }) => title),
+      (await repository.getRankedItems(userId, "movies")).map(
+        ({ title }) => title,
+      ),
     ).toEqual(["Arrival", "Moonlight", "moonlight"]);
   });
 
-  it("completes without comparisons when every appended title is a duplicate", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [
+  it("completes without comparisons when every appended title is a duplicate", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [
       { id: "existing", category: "movies", title: "Arrival" },
     ]);
 
-    const session = service.importUnordered({
+    const session = await service.importUnordered({
       userId,
       category: "movies",
       titles: ["Arrival", " Arrival "],
@@ -218,16 +235,16 @@ describe("CatalogService", () => {
       imported: 0,
       total: 0,
     });
-    expect(repository.getRankedItems(userId, "movies")).toEqual([
+    expect(await repository.getRankedItems(userId, "movies")).toEqual([
       { id: "existing", category: "movies", title: "Arrival" },
     ]);
   });
 
-  it("replaces an existing ranking when requested", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [item("existing")]);
+  it("replaces an existing ranking when requested", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [item("existing")]);
 
-    const session = service.importUnordered({
+    const session = await service.importUnordered({
       userId,
       category: "movies",
       titles: ["Replacement"],
@@ -239,18 +256,18 @@ describe("CatalogService", () => {
       imported: 1,
       total: 1,
     });
-    expect(repository.getRankedItems(userId, "movies")).toEqual([
+    expect(await repository.getRankedItems(userId, "movies")).toEqual([
       { id: "new-1", category: "movies", title: "Replacement" },
     ]);
   });
 
-  it("deduplicates replacement imports without considering old titles", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [
+  it("deduplicates replacement imports without considering old titles", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [
       { id: "existing", category: "movies", title: "Arrival" },
     ]);
 
-    const session = service.importUnordered({
+    const session = await service.importUnordered({
       userId,
       category: "movies",
       titles: ["Arrival", "Arrival"],
@@ -262,23 +279,23 @@ describe("CatalogService", () => {
       imported: 1,
       total: 1,
     });
-    expect(repository.getRankedItems(userId, "movies")).toEqual([
+    expect(await repository.getRankedItems(userId, "movies")).toEqual([
       { id: "new-1", category: "movies", title: "Arrival" },
     ]);
   });
 
-  it("lists items best-first with derived scores", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "tv-shows", [
+  it("lists items best-first with derived scores", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "tv-shows", [
       item("best", "tv-shows"),
       item("middle", "tv-shows"),
       item("worst", "tv-shows"),
     ]);
 
     expect(
-      service
-        .list(userId, "tv-shows")
-        .map(({ id, position, score }) => ({ id, position, score })),
+      (await service.list(userId, "tv-shows")).map(
+        ({ id, position, score }) => ({ id, position, score }),
+      ),
     ).toEqual([
       { id: "best", position: 1, score: 10 },
       { id: "middle", position: 2, score: 5 },
@@ -286,87 +303,107 @@ describe("CatalogService", () => {
     ]);
   });
 
-  it("keeps rankings isolated per user", () => {
+  it("keeps rankings isolated per user", async () => {
     const repository = new MemoryCatalogRepository();
     const users = new InMemoryUserRepository();
-    const alice = users.createUser("alice");
-    const bob = users.createUser("bob");
+    const alice = await users.createUser("alice");
+    const bob = await users.createUser("bob");
     let nextId = 1;
     const service = new CatalogService(repository, () => `new-${nextId++}`);
 
     expect(
-      service.addItem({ userId: alice.id, category: "movies", title: "A" }).next(),
+      (
+        await service.addItem({
+          userId: alice.id,
+          category: "movies",
+          title: "A",
+        })
+      ).next(),
     ).toMatchObject({ type: "done" });
     expect(
-      service.addItem({ userId: bob.id, category: "movies", title: "B" }).next(),
+      (
+        await service.addItem({
+          userId: bob.id,
+          category: "movies",
+          title: "B",
+        })
+      ).next(),
     ).toMatchObject({ type: "done" });
 
-    expect(service.list(alice.id, "movies").map(({ title }) => title)).toEqual([
-      "A",
-    ]);
-    expect(service.list(bob.id, "movies").map(({ title }) => title)).toEqual([
-      "B",
-    ]);
+    expect(
+      (await service.list(alice.id, "movies")).map(({ title }) => title),
+    ).toEqual(["A"]);
+    expect(
+      (await service.list(bob.id, "movies")).map(({ title }) => title),
+    ).toEqual(["B"]);
   });
 
-  it("deletes an item while preserving the relative order", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [item("a"), item("b"), item("c")]);
+  it("deletes an item while preserving the relative order", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [
+      item("a"),
+      item("b"),
+      item("c"),
+    ]);
 
-    service.delete(userId, "movies", "b");
+    await service.delete(userId, "movies", "b");
 
     expect(
-      repository.getRankedItems(userId, "movies").map(({ id }) => id),
+      (await repository.getRankedItems(userId, "movies")).map(({ id }) => id),
     ).toEqual(["a", "c"]);
   });
 
-  it("reranks an existing item without duplicating it", () => {
-    const { repository, service, userId } = createFixture();
-    repository.seed(userId, "movies", [item("a"), item("b"), item("c")]);
-    const session = service.rerank(userId, "movies", "c");
+  it("reranks an existing item without duplicating it", async () => {
+    const { repository, service, userId } = await createFixture();
+    await repository.seed(userId, "movies", [
+      item("a"),
+      item("b"),
+      item("c"),
+    ]);
+    const session = await service.rerank(userId, "movies", "c");
 
     expect(session.next()).toMatchObject({
       type: "compare",
       against: item("b"),
     });
-    expect(session.answer({ better: true })).toMatchObject({
+    expect(await session.answer({ better: true })).toMatchObject({
       type: "compare",
       against: item("a"),
     });
-    expect(session.answer({ better: true })).toMatchObject({
+    expect(await session.answer({ better: true })).toMatchObject({
       type: "done",
       item: { id: "c", position: 1 },
     });
     expect(
-      repository.getRankedItems(userId, "movies").map(({ id }) => id),
+      (await repository.getRankedItems(userId, "movies")).map(({ id }) => id),
     ).toEqual(["c", "a", "b"]);
   });
 
-  it("rejects invalid input and missing items", () => {
-    const { repository, service, userId } = createFixture();
+  it("rejects invalid input and missing items", async () => {
+    const { service, userId } = await createFixture();
 
-    expect(() =>
+    await expect(
       service.addItem({ userId, category: "movies", title: "   " }),
-    ).toThrow("Title is required");
-    expect(() => service.delete(userId, "movies", "missing")).toThrow(
+    ).rejects.toThrow("Title is required");
+    await expect(service.delete(userId, "movies", "missing")).rejects.toThrow(
       "was not found",
     );
-    expect(() => service.rerank(userId, "movies", "missing")).toThrow(
+    await expect(service.rerank(userId, "movies", "missing")).rejects.toThrow(
       "was not found",
     );
-    expect(() =>
+    await expect(
       service.importUnordered({
         userId,
         category: "movies",
         titles: [],
       }),
-    ).toThrow("At least one title");
-    expect(() =>
+    ).rejects.toThrow("At least one title");
+    await expect(
       service.importUnordered({
         userId,
         category: "movies",
         titles: ["Valid", "  "],
       }),
-    ).toThrow("cannot be empty");
+    ).rejects.toThrow("cannot be empty");
   });
 });

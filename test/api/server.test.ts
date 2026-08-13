@@ -24,7 +24,7 @@ const temporaryDirectories: string[] = [];
 async function startServer(webRoot?: string): Promise<Harness> {
   const catalogRepository = new InMemoryCatalogRepository();
   const userRepository = new InMemoryUserRepository();
-  const user = userRepository.createUser("default");
+  const user = await userRepository.createUser("default");
   let nextId = 0;
 
   const server = createApiServer({

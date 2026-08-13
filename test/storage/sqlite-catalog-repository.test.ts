@@ -32,11 +32,11 @@ afterEach(() => {
 });
 
 describe("SqliteCatalogRepository", () => {
-  it("persists ordered items across reopen", () => {
+  it("persists ordered items across reopen", async () => {
     const path = temporaryDatabasePath();
     const repository = new SqliteCatalogRepository(path);
-    const user = repository.createUser("tester");
-    repository.saveRanking(user.id, "movies", [
+    const user = await repository.createUser("tester");
+    await repository.saveRanking(user.id, "movies", [
       {
         id: "arrival",
         category: "movies",
@@ -44,10 +44,10 @@ describe("SqliteCatalogRepository", () => {
       },
       item("moonlight", "movies", "Moonlight"),
     ]);
-    repository.close();
+    await repository.close();
 
     const reopened = new SqliteCatalogRepository(path);
-    expect(reopened.getRankedItems(user.id, "movies")).toEqual([
+    expect(await reopened.getRankedItems(user.id, "movies")).toEqual([
       {
         id: "arrival",
         category: "movies",
@@ -55,71 +55,73 @@ describe("SqliteCatalogRepository", () => {
       },
       item("moonlight", "movies", "Moonlight"),
     ]);
-    reopened.close();
+    await reopened.close();
   });
 
-  it("keeps category rankings independent when replacing an order", () => {
+  it("keeps category rankings independent when replacing an order", async () => {
     const path = temporaryDatabasePath();
     const repository = new SqliteCatalogRepository(path);
-    const user = repository.createUser("tester");
-    repository.saveRanking(user.id, "movies", [
+    const user = await repository.createUser("tester");
+    await repository.saveRanking(user.id, "movies", [
       item("movie-a", "movies"),
       item("movie-b", "movies"),
     ]);
-    repository.saveRanking(user.id, "video-games", [
+    await repository.saveRanking(user.id, "video-games", [
       item("game-a", "video-games"),
       item("game-b", "video-games"),
     ]);
 
-    repository.saveRanking(user.id, "movies", [
+    await repository.saveRanking(user.id, "movies", [
       item("movie-b", "movies"),
       item("movie-a", "movies"),
     ]);
 
     expect(
-      repository.getRankedItems(user.id, "movies").map(({ id }) => id),
+      (await repository.getRankedItems(user.id, "movies")).map(({ id }) => id),
     ).toEqual(["movie-b", "movie-a"]);
     expect(
-      repository.getRankedItems(user.id, "video-games").map(({ id }) => id),
+      (await repository.getRankedItems(user.id, "video-games")).map(
+        ({ id }) => id,
+      ),
     ).toEqual(["game-a", "game-b"]);
-    repository.close();
+    await repository.close();
   });
 
-  it("keeps user rankings independent", () => {
+  it("keeps user rankings independent", async () => {
     const path = temporaryDatabasePath();
     const repository = new SqliteCatalogRepository(path);
-    const alice = repository.createUser("alice");
-    const bob = repository.createUser("bob");
-    repository.saveRanking(alice.id, "movies", [item("a", "movies")]);
-    repository.saveRanking(bob.id, "movies", [item("b", "movies")]);
+    const alice = await repository.createUser("alice");
+    const bob = await repository.createUser("bob");
+    await repository.saveRanking(alice.id, "movies", [item("a", "movies")]);
+    await repository.saveRanking(bob.id, "movies", [item("b", "movies")]);
 
-    expect(repository.getRankedItems(alice.id, "movies")).toEqual([
+    expect(await repository.getRankedItems(alice.id, "movies")).toEqual([
       item("a", "movies"),
     ]);
-    expect(repository.getRankedItems(bob.id, "movies")).toEqual([
+    expect(await repository.getRankedItems(bob.id, "movies")).toEqual([
       item("b", "movies"),
     ]);
-    repository.close();
+    await repository.close();
   });
 
-  it("rejects invalid rankings before replacing persisted data", () => {
+  it("rejects invalid rankings before replacing persisted data", async () => {
     const path = temporaryDatabasePath();
     const repository = new SqliteCatalogRepository(path);
-    const user = repository.createUser("tester");
-    repository.saveRanking(user.id, "movies", [item("movie-a", "movies")]);
+    const user = await repository.createUser("tester");
+    await repository.saveRanking(user.id, "movies", [item("movie-a", "movies")]);
 
-    expect(() =>
+    await expect(
       repository.saveRanking(user.id, "movies", [
         item("game-a", "video-games"),
       ]),
-    ).toThrow("another category");
-    expect(repository.getRankedItems(user.id, "movies")).toEqual([
+    ).rejects.toThrow("another category");
+    expect(await repository.getRankedItems(user.id, "movies")).toEqual([
       item("movie-a", "movies"),
     ]);
-    repository.close();
+    await repository.close();
   });
 
-  it("migrates legacy v1 databases to the default user", () => {
+  it("migrates legacy v1 databases to the default user", async () => {
     const path = temporaryDatabasePath();
     const legacy = new Database(path);
     legacy.exec(`
@@ -141,11 +143,11 @@ describe("SqliteCatalogRepository", () => {
     legacy.close();
 
     const repository = new SqliteCatalogRepository(path);
-    const defaultUser = repository.findUserByName("default");
+    const defaultUser = await repository.findUserByName("default");
     expect(defaultUser).toBeDefined();
-    expect(repository.getRankedItems(defaultUser!.id, "movies")).toEqual([
+    expect(await repository.getRankedItems(defaultUser!.id, "movies")).toEqual([
       item("legacy-item", "movies", "Legacy"),
     ]);
-    repository.close();
+    await repository.close();
   });
 });

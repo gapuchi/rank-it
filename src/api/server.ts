@@ -76,7 +76,9 @@ function buildApp(handlers: Handlers): Hono {
 
   app.get("/api/categories", (c) => c.json({ categories }));
 
-  app.get("/api/users", (c) => c.json({ users: users.listUsers() }));
+  app.get("/api/users", async (c) =>
+    c.json({ users: await users.listUsers() }),
+  );
 
   app.post("/api/users", async (c) => {
     const body = await readJson(c);
@@ -84,37 +86,41 @@ function buildApp(handlers: Handlers): Hono {
     if (typeof name !== "string" || name.trim().length === 0) {
       throw new HttpError(400, "A user name is required");
     }
-    const user = runCatch(() => users.createUser(name));
+    const user = await runCatch(() => users.createUser(name));
     return c.json({ user }, 201);
   });
 
   const itemsPath = "/api/users/:userId/categories/:category/items";
 
-  app.get(itemsPath, (c) => {
-    const userId = requireUser(users, c.req.param("userId"));
+  app.get(itemsPath, async (c) => {
+    const userId = await requireUser(users, c.req.param("userId"));
     const category = validateCategory(c.req.param("category"));
-    return c.json({ items: service.list(userId, category) });
+    return c.json({ items: await service.list(userId, category) });
   });
 
   app.post(itemsPath, async (c) => {
-    const userId = requireUser(users, c.req.param("userId"));
+    const userId = await requireUser(users, c.req.param("userId"));
     const category = validateCategory(c.req.param("category"));
     const title = await readTitle(c);
-    const session = runCatch(() => service.addItem({ userId, category, title }));
+    const session = await runCatch(() =>
+      service.addItem({ userId, category, title }),
+    );
     return c.json(sessions.start(session), 201);
   });
 
-  app.delete(`${itemsPath}/:id`, (c) => {
-    const userId = requireUser(users, c.req.param("userId"));
+  app.delete(`${itemsPath}/:id`, async (c) => {
+    const userId = await requireUser(users, c.req.param("userId"));
     const category = validateCategory(c.req.param("category"));
-    runCatch(() => service.delete(userId, category, c.req.param("id")));
+    await runCatch(() =>
+      service.delete(userId, category, c.req.param("id")),
+    );
     return c.body(null, 204);
   });
 
-  app.post(`${itemsPath}/:id/rerank`, (c) => {
-    const userId = requireUser(users, c.req.param("userId"));
+  app.post(`${itemsPath}/:id/rerank`, async (c) => {
+    const userId = await requireUser(users, c.req.param("userId"));
     const category = validateCategory(c.req.param("category"));
-    const session = runCatch(() =>
+    const session = await runCatch(() =>
       service.rerank(userId, category, c.req.param("id")),
     );
     return c.json(sessions.start(session), 201);
@@ -124,7 +130,7 @@ function buildApp(handlers: Handlers): Hono {
     const sessionId = c.req.param("id");
     const answer = await readAnswer(c);
     try {
-      const prompt = sessions.answer(sessionId, answer);
+      const prompt = await sessions.answer(sessionId, answer);
       return c.json({ prompt });
     } catch (error: unknown) {
       if (error instanceof SessionNotFoundError) {
@@ -171,14 +177,14 @@ async function readAnswer(c: Context): Promise<RankingAnswer> {
   return { better };
 }
 
-function requireUser(
+async function requireUser(
   users: UserRepository,
   userId: string | undefined,
-): string {
+): Promise<string> {
   if (userId === undefined || userId.length === 0) {
     throw new HttpError(400, "A user is required");
   }
-  if (!users.listUsers().some((user) => user.id === userId)) {
+  if (!(await users.listUsers()).some((user) => user.id === userId)) {
     throw new HttpError(404, `User "${userId}" was not found`);
   }
   return userId;
@@ -199,9 +205,11 @@ function validateCategory(value: string | undefined): Category {
 }
 
 /** Runs a core call, mapping its validation errors to HTTP status codes. */
-function runCatch<T>(action: () => T): T {
+async function runCatch<T>(
+  action: () => T | Promise<T>,
+): Promise<T> {
   try {
-    return action();
+    return await action();
   } catch (error: unknown) {
     if (error instanceof Error) {
       const status = error.message.includes("was not found") ? 404 : 400;
